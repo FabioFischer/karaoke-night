@@ -18,14 +18,16 @@ Studio (GPU) ──Tailscale──► Stage ──► REAPER ──► speakers
 
 - **Alpha:**
   - song search and stem separation
-  - stems toggled live, and key change
+  - stems toggled live, and key change at setup
   - line-synced lyrics
   - playback through REAPER with live vocal effects
 - **Beta:**
   - two singers with roles (lead or backing), and lyrics split the same way
+  - melody analysis: pitch correction that follows the song's key, and scoring against the original melody
+  - pre-performance preview to adjust volumes, key and lyrics timing
   - phone companion page with live lyrics and a queue
   - recorded performances with share links
-  - scoring, song suggestions and playlist import
+  - song suggestions and playlist import
 
 See [docs/PLAN.md](docs/PLAN.md) for the decisions, architecture, contracts and milestones.
 

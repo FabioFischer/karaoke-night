@@ -10,7 +10,7 @@
 - **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6).
 - **Next:**
   - spikes S2 (separation), S3 (REAPER), S4 (search and lyrics) and S6 (melody and key), which don't need a microphone;
-  - S1 (latency) and S5 (transfer) once their prerequisites are ready (§6). Hardware purchases get reviewed before S1.
+  - S1 (latency) and S5 (transfer) once their prerequisites are ready (§6). The S1 runbook is in [`spikes/s1-latency/`](../spikes/s1-latency/README.md). Its first round runs on the interface on hand, and buying a 2-preamp interface waits for those results.
 
 ## 1. Goal
 

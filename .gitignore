@@ -1,0 +1,15 @@
+# Personal notes and data (never committed)
+*.local.*
+.env
+
+# Audio, song packages and model weights
+library/
+*.wav
+*.flac
+*.mp3
+*.opus
+*.m4a
+*.webm
+*.ckpt
+*.onnx
+*.pth

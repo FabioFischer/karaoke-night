@@ -2,6 +2,16 @@
 
 > v0.1 · 2026-11-04 · Living document: update it whenever a decision changes.
 
+## Status
+
+*Last updated: 2026-11-04*
+
+- **Phase:** 0 (proofs of concept), not started.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`).
+- **Next:**
+  - spikes S2 (separation), S3 (REAPER) and S4 (search and lyrics), which don't need a microphone;
+  - S1 (latency) and S5 (transfer) once their prerequisites are ready (§6).
+
 ## 1. Goal
 
 A self-hosted karaoke app for private use that plays the **original recording** of each song, split into stems: lead vocals, backing vocals, drums, bass, guitar, piano and other. Singers choose which stems stay on, and their live voices go through an effects chain in REAPER.
@@ -155,6 +165,7 @@ Every route requires `Authorization: Bearer <token>`.
 karaoke-night/
 ├─ README.md
 ├─ LICENSE
+├─ CLAUDE.md                    # guidance for AI coding agents
 ├─ docs/
 │  └─ PLAN.md                   # this file
 ├─ pyproject.toml               # uv workspace
@@ -181,7 +192,7 @@ karaoke-night/
 The goal is to remove the big risks before building the app. Each spike has a criterion that decides whether we keep the plan or change course.
 
 **Prerequisites:**
-- [ ] A test set of ~20 songs that reflects what people will actually sing. Include duets with constant harmony, songs heavy on backing vocals, and live recordings that are the best-known version. Keep the list outside the repository.
+- [ ] A test set of ~20 songs that reflects what people will actually sing. Include duets with constant harmony, songs heavy on backing vocals, and live recordings that are the best-known version. Keep it in `spikes/songs.local.txt`, which is gitignored.
 - [ ] A dynamic microphone and an audio interface connected to the Stage machine.
 - [ ] Tailscale installed on the Studio and the Stage, on the same account.
 

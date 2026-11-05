@@ -31,6 +31,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Storage | SQLite on the Stage (local library and history), plus files on disk. | No infrastructure to run. |
 | Microphones | The REAPER template ships with 2 mic tracks from day one. | The beta needs two singers, and this avoids rebuilding the template. |
 | Workflow | One PR per milestone. | Small, reviewable changes. |
+| License | MIT, to be revisited if the app matures into a product. | Simple and permissive, and every dependency is permissive too. |
 
 ## 4. Architecture principles
 
@@ -153,6 +154,7 @@ Every route requires `Authorization: Bearer <token>`.
 ```
 karaoke-night/
 ├─ README.md
+├─ LICENSE
 ├─ docs/
 │  └─ PLAN.md                   # this file
 ├─ pyproject.toml               # uv workspace
@@ -251,4 +253,3 @@ Proposed order:
 - [ ] Separation models (from S2)
 - [ ] Loudness target between songs (LUFS)
 - [ ] Hardware recommendations confirmed (from S1 and sound tests)
-- [ ] Repository license

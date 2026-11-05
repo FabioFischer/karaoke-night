@@ -36,3 +36,7 @@ Python 3.12 (uv, FastAPI) · audio-separator (RoFormer, Demucs) · yt-dlp · ytm
 ## Legal note
 
 This project is meant for private use and does not distribute any audio. You are responsible for following copyright law and the terms of service of any platform you get audio from.
+
+## License
+
+[MIT](LICENSE). The license covers the code only. This repository contains no audio.

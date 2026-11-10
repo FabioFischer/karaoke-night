@@ -1,16 +1,17 @@
 # Karaoke Night: plan
 
-> v0.2 · 2026-11-05 · Living document: update it whenever a decision changes.
+> v0.3 · 2026-11-10 · Living document: update it whenever a decision changes.
 
 ## Status
 
-*Last updated: 2026-11-05*
+*Last updated: 2026-11-10*
 
-- **Phase:** 0 (proofs of concept), not started.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6).
+- **Phase:** 0 (proofs of concept), in progress.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1 (pass, results in §6).
 - **Next:**
-  - spikes S2 (separation), S3 (REAPER), S4 (search and lyrics) and S6 (melody and key), which don't need a microphone;
-  - S1 (latency) and S5 (transfer) once their prerequisites are ready (§6). The S1 runbook is in [`spikes/s1-latency/`](../spikes/s1-latency/README.md). Its first round runs on the interface on hand, and buying a 2-preamp interface waits for those results.
+  - spikes S3 (REAPER), S4 (search and lyrics), S2 (separation) and S6 (melody and key). S3 needs only REAPER on the Stage; S4 and S2 need the test song list;
+  - S5 (transfer) once Tailscale is set up on both machines;
+  - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
 ## 1. Goal
 
@@ -18,7 +19,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 
 ## 2. Key constraints
 
-- **Latency.** The live voice path (mic → interface → effects → speakers) must stay at roughly 12 ms round trip or less to feel natural. Effects in that path must add no latency of their own: no look-ahead compressors, and pitch correction in low-latency mode.
+- **Latency.** The live voice path (mic → interface → effects → speakers) should feel natural to sing with. About 12 ms round trip is the usual reference, but S1 showed that around 25 ms can still be comfortable, so comfort decides. Effects in that path must add no latency of their own: no look-ahead compressors, and pitch correction in low-latency mode.
 - **ASIO is single-client.** REAPER owns the audio device, so the app never opens it.
 - **Original stems of well-known songs aren't publicly available,** because master recording rights are licensed case by case. Stems are produced with AI source separation instead. Separating lead from backing vocals is the least reliable step.
 - **Streaming services don't provide audio.** Spotify's API is metadata only (the audio is DRM-protected). The practical sources are YouTube (via `yt-dlp`) and local files.
@@ -206,12 +207,23 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 | # | Spike | Where | How | Pass criterion |
 |---|---|---|---|---|
-| S1 | Latency | Stage + interface | Run first with the interface on hand, and again after any interface upgrade, to compare. Run LatencyMon. Test REAPER with the interface's native ASIO driver and with ASIO4ALL, at buffers of 64, 128 and 256, with the effects chain on. Measure the real round trip with a loopback cable (output → free input) recording a click. | Around 12 ms or less measured, and comfortable singing with pitch correction on. Otherwise, plan B: the interface's direct monitoring plus reverb/delay only (100% wet) from REAPER. |
+| S1 | Latency | Stage + interface | Run first with the interface on hand, and again after any interface upgrade, to compare. Run LatencyMon. Test REAPER with the interface's native ASIO driver and with ASIO4ALL, at buffers of 64, 128 and 256, with the effects chain on. Measure the real round trip by recording a click, through the air with the mic or with a loopback cable. | Comfortable singing with pitch correction on. About 12 ms is the reference, but comfort decides. Otherwise, plan B: the interface's direct monitoring plus reverb/delay only (100% wet) from REAPER. |
 | S2 | Separation | Studio | Run 5 test songs through 2–3 model combinations. Measure time and VRAM, listen to lead vs backing, and check that the stems add up to the original. | Acceptable quality at about 3 min per song or less. This spike picks the models. |
 | S3 | REAPER | Stage | Lua listener loading 7 stems, with play, stop and mute driven from a Python script. | Loads in under 2 s, without interrupting mic audio during the swap. |
 | S4 | Search and lyrics | Any | Run `ytmusicapi` + `yt-dlp` and LRCLIB on the 20 test songs. Don't penalize "live" versions, which in some genres are the best-known recordings. | The right version is in the top 3 for at least 18 of 20. Measure LRCLIB coverage. |
 | S5 | Transfer | Stage on a remote network | Download a ~150 MB package from the Studio over Tailscale, simulating a remote network with a phone hotspot. | Under ~1 min per package. |
 | S6 | Melody and key | Studio | On 5 songs separated in S2, including one that changes key, run pitch tracking (f0) on the lead stem with 2–3 trackers (for example pYIN, torchcrepe, RMVPE). Group the curve into notes, and detect the key per section from the melody plus the instrumental's harmony (chroma). Play the notes back as a synth over the instrumental and compare by ear. Also try a backing stem that holds a single harmony line. | The notes follow the sung melody well enough to score against, key changes are found where they happen, and it adds little time next to separation. This spike picks the tracker for the beta. |
+
+**S1, round 1 (2026-11-10): pass.** Runbook and click generator in [`spikes/s1-latency/`](../spikes/s1-latency/README.md).
+
+- An entry-level 1-preamp interface with no native ASIO driver (ASIO4ALL over the Windows class driver) measured about 24 ms round trip at 128 samples and 22 ms at 64. WASAPI exclusive was worse (about 30 ms). Most of the delay is fixed by the driver path, so smaller buffers barely help. A re-measurement after the setup fixes below gave the same ~24 ms at 128 samples, with much cleaner sound.
+- Singing still felt comfortable, even with a free pitch correction plugin that adds about 1000 samples (about 23 ms). The plan keeps the effects in the live path. The official chain is defined later, preferring zero-latency pitch correction.
+- The idle LatencyMon run was green (highest DPC under 1 ms). 128 samples is the working buffer.
+- Hiss, low volume and a robotic, doubled voice all came from the setup, not from the hardware:
+  - the interface was on a USB hub: plugged straight into the machine, the hiss dropped and the volume went up a lot;
+  - Windows had the interface at a different sample rate from REAPER's 44.1 kHz, so ASIO4ALL was resampling. Plugging the interface into another USB port makes Windows see a new device, with the default sample rate and ASIO4ALL's default buffer (512 samples, about 57 ms round trip), so both have to be set again;
+  - the voice was monitored twice (REAPER's input monitoring plus another monitoring path), which sounds doubled and robotic.
+- These become setup rules for the template and the first-night checklist (A6, A9).
 
 ### Phase 1: alpha
 
@@ -227,7 +239,7 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A6 | REAPER bridge: session template (pitch correction in chromatic mode), Lua listener, and the Python `Player` (load, play, stop, mute, transpose, position, end of song). | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
-| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist. | A full karaoke test session at the venue. |
+| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). | A full karaoke test session at the venue. |
 
 ### Phase 2: beta
 
@@ -255,8 +267,8 @@ Proposed order:
 | Item | Recommendation |
 |---|---|
 | Microphones | Cardioid dynamic (for example Shure SM58 or Behringer XM8500): they resist feedback and need no phantom power. If wireless, prefer analog UHF with XLR outputs; 2.4 GHz digital systems add a few ms. |
-| Audio interface | At least 2 mic preamps and a native ASIO driver (for example Behringer UMC202HD/UMC204HD or Focusrite Scarlett 2i2). |
-| Speakers | Wired from the interface output. **Never Bluetooth**, which adds 100–200 ms of delay. For larger rooms, a PA with a line input. |
+| Audio interface | At least 2 mic preamps and a native ASIO driver (for example Behringer UMC204HD or Focusrite Scarlett 2i2). Without a native driver it still works through ASIO4ALL, at about 22–24 ms round trip (S1). |
+| Speakers | Wired from the interface output. **Never Bluetooth**, which adds 100–200 ms of delay. Enough power to hear the voice over the music without running at full volume. For larger rooms, a PA with a line input. |
 | Stage machine | High-performance power plan, plugged in, validated with LatencyMon. |
 | Studio machine | A CUDA-capable NVIDIA GPU. VRAM requirements get confirmed in S2. |
 
@@ -265,6 +277,7 @@ Proposed order:
 | Risk | Mitigation |
 |---|---|
 | High latency on the Stage machine (DPC or drivers) | Run S1 early. Plan B uses direct monitoring. Use an interface with a native ASIO driver. |
+| Other singers notice the latency more than the maintainer did in S1 | Ask the singers on the first night (A9). Plan B and a native-driver interface remain options. |
 | Studio offline, or no internet at the venue | Preload the library. In the beta, a cloud Studio. |
 | YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. |
 | Poor lead vs backing separation (duets) | The "no vocals" preset always works. Pick models in S2 and reprocess when better ones appear. |

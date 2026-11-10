@@ -13,7 +13,7 @@ Runbook for spike S3 in [docs/PLAN.md](../../docs/PLAN.md) §6. It happens in RE
 | `karaoke_listener.lua` | The ReaScript started inside REAPER. It runs `load`, `transpose`, `ping` and `quit`, sent through ExtState. |
 | `lib/json.lua` | [rxi/json.lua](https://github.com/rxi/json.lua) v0.1.2 (MIT, notice in the file header), vendored unmodified from commit `dbf4b2d`. |
 | `make_test_songs.py` | Writes two test packages, `song-a` and `song-b`, under `library/` (gitignored). |
-| `driver.py` | The command line driver. Talks to REAPER at `http://localhost:8080/_/`. |
+| `driver.py` | The command line driver. Talks to REAPER at `http://127.0.0.1:8080/_/`. |
 | `test_driver.py` | Unit tests for the driver's parsing and encoding, and for the package writer. |
 
 Everything is Python standard library. Run the tests from the repo root with `python -m unittest discover -s spikes/s3-reaper -v`.
@@ -29,14 +29,16 @@ Everything is Python standard library. Run the tests from the repo root with `py
 ## What you need
 
 - The Stage machine with REAPER, the audio interface and the mic set up as in S1 (same USB port, 44.1 kHz, 128 samples).
-- A terminal with Python 3 in the repo folder.
+- A terminal with Python 3.11 or later in the repo folder.
 - About 600 MB of free disk for the two 240 s test songs (`--seconds 60` writes about 150 MB).
 
 ## 1. Enable the web interface
 
 1. *Options → Preferences → Control/OSC/web → Add*.
 2. *Control surface mode*: **Web browser interface**. Port **8080**. Leave the username and password empty, and the default interface as it is.
-3. *OK*, then open `http://localhost:8080` in a browser: REAPER's remote page should load. Close it.
+3. *OK*, then open `http://127.0.0.1:8080` in a browser: REAPER's remote page should load. Close it.
+
+Use `127.0.0.1`, not `localhost`. On Windows `localhost` resolves to the IPv6 address `::1` first, and when the server listens on IPv4 only every request waits about 2 s before it falls back to `127.0.0.1`. That alone would fail the 2 s load criterion and slow `watch` to one poll every 2 s.
 
 ## 2. Generate the test songs
 
@@ -50,7 +52,7 @@ This writes `spikes/s3-reaper/library/song-a/` and `song-b/`, each with 7 stereo
 
 1. Open the session with the **Mic** track from S1: armed, input monitoring on, effects chain on.
 2. The stem tracks (*Lead*, *Backing*, *Drums*, *Bass*, *Guitar*, *Piano*, *Other*) can exist already, or the listener creates the missing ones at the end of the track list on the first load.
-3. Put any short item on the Mic track (a recording or the S1 click). It must still be there after every load.
+3. Put any short item on the Mic track (a recording or the S1 click), shorter than the test songs. It must still be there after every load. Delete it when the load checks are done: items on the Mic track count toward the end of the project, so one that runs past the song keeps playback going after the song ends, and *Stop at end of project* (next step) stops there instead.
 4. Check that *Preferences → Audio → Playback → Stop/repeat playback at end of project* is on, as §5.4 asks.
 5. Open *View → Performance Meter* and keep it visible.
 
@@ -74,7 +76,7 @@ python spikes/s3-reaper/driver.py watch [--seconds 10] [--interval 0.1]
 python spikes/s3-reaper/driver.py bench [--runs 10]       # alternates song-a and song-b
 ```
 
-Common options go before the command: `--host`, `--port` (default 8080), `--timeout` (seconds to wait for an ack, default 5).
+Common options go before the command: `--host` (default `127.0.0.1`), `--port` (default 8080), `--timeout` (seconds to wait for an ack and for each HTTP reply, default 5).
 
 ## 6. Measure
 
@@ -95,7 +97,7 @@ Common options go before the command: `--host`, `--port` (default 8080), `--time
 |---|---|
 | `Connection refused` | The web interface is off, or on another port (step 1). |
 | `no ack … after 5 s` | The listener is not running, or stopped on an error (check the ReaScript console). |
-| Ack with `"ok": false` | The listener ran the command and it failed: the error says why, for example a missing stem file. |
+| Ack with `"ok": false` | The listener ran the command and it failed: the error says why, for example a manifest it cannot open. |
 | `no track named …` on `mute` | No track with that name yet. Load a song first, or check `tracks`. |
 
 ## Recording the results

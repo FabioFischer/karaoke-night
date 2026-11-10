@@ -120,11 +120,11 @@ def cadence(samples: list[tuple[float, int, float]]) -> dict:
     samples count. step_error is position delta minus wall delta per poll, and
     drift is its sum.
     """
-    playing = [(wall, pos) for wall, state, pos in samples if state == 1]
-    intervals = [(b[0] - a[0]) * 1000 for a, b in zip(playing, playing[1:])]
-    errors = [((b[1] - a[1]) - (b[0] - a[0])) * 1000 for a, b in zip(playing, playing[1:])]
+    pairs = [(a, b) for a, b in zip(samples, samples[1:]) if a[1] == 1 and b[1] == 1]
+    intervals = [(b[0] - a[0]) * 1000 for a, b in pairs]
+    errors = [((b[2] - a[2]) - (b[0] - a[0])) * 1000 for a, b in pairs]
     return {
-        "playing_samples": len(playing),
+        "playing_samples": sum(1 for _, state, _ in samples if state == 1),
         "intervals_ms": summarize(intervals),
         "step_error_ms": summarize(errors),
         "drift_ms": sum(errors),
@@ -235,9 +235,9 @@ def cmd_bench(reaper: Reaper, args) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Drive REAPER for spike S3 through its web interface.")
-    parser.add_argument("--host", default="localhost")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--timeout", type=float, default=5.0, help="seconds to wait for a listener ack (default 5)")
+    parser.add_argument("--timeout", type=float, default=5.0, help="seconds to wait for a listener ack, and for each HTTP reply (default 5)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("tracks", help="list tracks with their web interface index").set_defaults(func=cmd_tracks)
@@ -274,7 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    args.func(Reaper(args.host, args.port), args)
+    args.func(Reaper(args.host, args.port, args.timeout), args)
 
 
 if __name__ == "__main__":

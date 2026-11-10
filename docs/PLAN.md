@@ -216,10 +216,14 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 **S1, round 1 (2026-11-10): pass.** Runbook and click generator in [`spikes/s1-latency/`](../spikes/s1-latency/README.md).
 
-- An entry-level 1-preamp interface with no native ASIO driver (ASIO4ALL over the Windows class driver) measured about 24 ms round trip at 128 samples and 22 ms at 64. WASAPI exclusive was worse (about 30 ms). Most of the delay is fixed by the driver path, so smaller buffers barely help.
+- An entry-level 1-preamp interface with no native ASIO driver (ASIO4ALL over the Windows class driver) measured about 24 ms round trip at 128 samples and 22 ms at 64. WASAPI exclusive was worse (about 30 ms). Most of the delay is fixed by the driver path, so smaller buffers barely help. These numbers were taken before the setup fixes below.
 - Singing still felt comfortable, even with a free pitch correction plugin that adds about 1000 samples (about 23 ms). The plan keeps the effects in the live path. The official chain is defined later, preferring zero-latency pitch correction.
 - The idle LatencyMon run was green (highest DPC under 1 ms). 128 samples is the working buffer.
-- The interface's output adds audible hiss when the speakers are turned all the way up, and a small desktop speaker is too weak for karaoke. Both feed the hardware recommendations (§7).
+- Hiss, low volume and a robotic, doubled voice all came from the setup, not from the hardware:
+  - the interface was on a USB hub: plugged straight into the machine, the hiss dropped and the volume went up a lot;
+  - Windows had the interface at a different sample rate from REAPER's 44.1 kHz, so ASIO4ALL was resampling;
+  - the voice was monitored twice (REAPER's input monitoring plus another monitoring path), which sounds doubled and robotic.
+- These become setup rules for the template and the first-night checklist (A6, A9).
 
 ### Phase 1: alpha
 
@@ -235,7 +239,7 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A6 | REAPER bridge: session template (pitch correction in chromatic mode), Lua listener, and the Python `Player` (load, play, stop, mute, transpose, position, end of song). | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
-| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist. | A full karaoke test session at the venue. |
+| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). | A full karaoke test session at the venue. |
 
 ### Phase 2: beta
 
@@ -264,7 +268,7 @@ Proposed order:
 |---|---|
 | Microphones | Cardioid dynamic (for example Shure SM58 or Behringer XM8500): they resist feedback and need no phantom power. If wireless, prefer analog UHF with XLR outputs; 2.4 GHz digital systems add a few ms. |
 | Audio interface | At least 2 mic preamps and a native ASIO driver (for example Behringer UMC204HD or Focusrite Scarlett 2i2). Without a native driver it still works through ASIO4ALL, at about 22–24 ms round trip (S1). |
-| Speakers | Wired from the interface output. **Never Bluetooth**, which adds 100–200 ms of delay. Enough power to hear the voice over the music without running at full volume, which also brings up the interface's hiss: a small desktop speaker isn't enough. For larger rooms, a PA with a line input. |
+| Speakers | Wired from the interface output. **Never Bluetooth**, which adds 100–200 ms of delay. Enough power to hear the voice over the music without running at full volume. For larger rooms, a PA with a line input. |
 | Stage machine | High-performance power plan, plugged in, validated with LatencyMon. |
 | Studio machine | A CUDA-capable NVIDIA GPU. VRAM requirements get confirmed in S2. |
 

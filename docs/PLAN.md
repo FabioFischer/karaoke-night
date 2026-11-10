@@ -216,12 +216,12 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 **S1, round 1 (2026-11-10): pass.** Runbook and click generator in [`spikes/s1-latency/`](../spikes/s1-latency/README.md).
 
-- An entry-level 1-preamp interface with no native ASIO driver (ASIO4ALL over the Windows class driver) measured about 24 ms round trip at 128 samples and 22 ms at 64. WASAPI exclusive was worse (about 30 ms). Most of the delay is fixed by the driver path, so smaller buffers barely help. These numbers were taken before the setup fixes below.
+- An entry-level 1-preamp interface with no native ASIO driver (ASIO4ALL over the Windows class driver) measured about 24 ms round trip at 128 samples and 22 ms at 64. WASAPI exclusive was worse (about 30 ms). Most of the delay is fixed by the driver path, so smaller buffers barely help. A re-measurement after the setup fixes below gave the same ~24 ms at 128 samples, with much cleaner sound.
 - Singing still felt comfortable, even with a free pitch correction plugin that adds about 1000 samples (about 23 ms). The plan keeps the effects in the live path. The official chain is defined later, preferring zero-latency pitch correction.
 - The idle LatencyMon run was green (highest DPC under 1 ms). 128 samples is the working buffer.
 - Hiss, low volume and a robotic, doubled voice all came from the setup, not from the hardware:
   - the interface was on a USB hub: plugged straight into the machine, the hiss dropped and the volume went up a lot;
-  - Windows had the interface at a different sample rate from REAPER's 44.1 kHz, so ASIO4ALL was resampling;
+  - Windows had the interface at a different sample rate from REAPER's 44.1 kHz, so ASIO4ALL was resampling. Plugging the interface into another USB port makes Windows see a new device, with the default sample rate and ASIO4ALL's default buffer (512 samples, about 57 ms round trip), so both have to be set again;
   - the voice was monitored twice (REAPER's input monitoring plus another monitoring path), which sounds doubled and robotic.
 - These become setup rules for the template and the first-night checklist (A6, A9).
 

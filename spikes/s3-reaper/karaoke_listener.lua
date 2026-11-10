@@ -70,18 +70,17 @@ local function load_song(cmd)
   local song_dir = cmd.manifest:match("^(.*)[/\\]") or "."
   local volume = 10 ^ ((manifest.gain_db or 0) / 20)
 
-  -- Resolve every stem before touching the project, so a broken package
-  -- leaves the current song in place.
   local paths = {}
   for _, stem in ipairs(STEMS) do
     local entry = manifest.stems[stem]
-    if entry then
-      local path = song_dir .. "/" .. entry.file
-      if not reaper.file_exists(path) then error("missing stem file " .. path, 0) end
-      paths[stem] = path
-    end
+    if entry then paths[stem] = song_dir .. "/" .. entry.file end
   end
 
+  -- An error up to here (unreadable manifest, bad JSON, no stems table)
+  -- leaves the project untouched. An error inside the pcall below, such as a
+  -- stem that cannot be opened, leaves the stem tracks it already cleared or
+  -- filled as they are: the current song is partly replaced. Either way the
+  -- error goes into the ack.
   -- Only tracks named after a stem are touched: the mic tracks stay intact.
   reaper.PreventUIRefresh(1)
   reaper.Undo_BeginBlock()
@@ -123,12 +122,7 @@ local OPS = {
 -- Returns true when the loop should stop.
 local function handle(raw)
   local start = reaper.time_precise()
-  local decoded, cmd = pcall(json.decode, raw)
-  if not decoded or type(cmd) ~= "table" then
-    reaper.SetExtState(SECTION, "ack", json.encode({ ok = false, error = "bad command: " .. tostring(cmd) }), false)
-    return false
-  end
-
+  local cmd = json.decode(raw)
   local ok, err = false, "unknown op " .. tostring(cmd.op)
   if OPS[cmd.op] then ok, err = pcall(OPS[cmd.op], cmd) end
   local ack = { id = cmd.id, op = cmd.op, ok = ok }

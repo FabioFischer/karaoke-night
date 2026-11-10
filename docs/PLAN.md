@@ -149,7 +149,7 @@ Every route requires `Authorization: Bearer <token>`.
 
 ### 5.4 Stage ↔ REAPER
 
-**REAPER's built-in web interface** (`localhost:8080`):
+**REAPER's built-in web interface** (`127.0.0.1:8080`):
 
 | Command | Purpose |
 |---|---|

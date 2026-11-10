@@ -16,3 +16,6 @@ library/
 
 # REAPER peak caches
 *.reapeaks
+
+# Python bytecode
+__pycache__/

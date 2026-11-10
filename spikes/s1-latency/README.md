@@ -20,7 +20,7 @@ Runbook for spike S1 in [docs/PLAN.md](../../docs/PLAN.md) §6. It happens in RE
 ## 1. Prepare the machine
 
 - Windows power mode set to *Best performance* (or the *High performance* plan where it exists), with the machine plugged in.
-- Plug the interface **straight into a USB port on the machine**, not through a hub, dock or monitor. Hubs can add hiss and lower the output level.
+- Plug the interface **straight into a USB port on the machine**, not through a hub, dock or monitor. Hubs can add hiss and lower the output level. Always use the same port: on another port Windows sees a new device (sometimes under another name), and the sample rate and ASIO4ALL settings below have to be set again.
 - In Windows sound settings (*Control Panel → Sound*), open the interface under both *Playback* and *Recording*, and under *Advanced* set the default format to **44100 Hz**, the same as REAPER. A mismatch makes ASIO4ALL resample, which can sound metallic.
 - Close other apps, especially anything that plays sound. Keep Wi-Fi on, because the Stage needs the network on a real night.
 - If the TV is connected over HDMI, mute it or disable the HDMI audio device in Windows.
@@ -39,7 +39,7 @@ If the verdict is red, find the culprit by disabling one device at a time (Wi-Fi
 1. *Audio system*: ASIO, with the interface's driver (or *ASIO4ALL v2*).
 2. With ASIO4ALL, click *ASIO Configuration…*, then the wrench icon for the advanced view:
    - leave **only the interface** switched on, for input and output. Switch off the built-in sound card and any monitor audio;
-   - set *ASIO Buffer Size* to **128**.
+   - set *ASIO Buffer Size* to **128**. ASIO4ALL keeps its settings per device and defaults to 512. The buffer field in REAPER only applies when *Request block size* is checked; otherwise the ASIO4ALL panel decides.
 3. Check *Enable inputs*, input range *In 1* to *In 2*, output range *Out 1* to *Out 2*.
 4. Sample rate **44.1 kHz**, the same as the stems.
 5. **Audio → Recording:** turn off *Use audio driver reported latency*. Otherwise REAPER moves recordings back by the reported latency and the measurement reads close to zero. **Turn it back on after the spike.**
@@ -72,6 +72,7 @@ What you measure is input latency plus output latency, the same path a monitored
 | Nothing recorded on the Mic track | Wrong input, track not armed, or input gain at minimum. |
 | Feedback or repeated clicks | Monitoring is on in the Mic track. |
 | The peak sits exactly on `0:01.000` | *Use audio driver reported latency* is still on. |
+| Much more latency than before (around 50 ms or more), and changing the buffer in REAPER changes nothing | The interface is on another USB port or was re-detected, so ASIO4ALL is back at 512 samples and Windows at its default sample rate. Set both again (steps 1 and 3). |
 | Metallic or robotic sound | Windows' sample rate for the interface differs from REAPER's (step 1), or the voice is monitored twice (step 7). |
 
 ## 5. Other drivers and buffers (optional)

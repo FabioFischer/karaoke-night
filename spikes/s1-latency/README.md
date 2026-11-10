@@ -20,6 +20,8 @@ Runbook for spike S1 in [docs/PLAN.md](../../docs/PLAN.md) §6. It happens in RE
 ## 1. Prepare the machine
 
 - Windows power mode set to *Best performance* (or the *High performance* plan where it exists), with the machine plugged in.
+- Plug the interface **straight into a USB port on the machine**, not through a hub, dock or monitor. Hubs can add hiss and lower the output level.
+- In Windows sound settings (*Control Panel → Sound*), open the interface under both *Playback* and *Recording*, and under *Advanced* set the default format to **44100 Hz**, the same as REAPER. A mismatch makes ASIO4ALL resample, which can sound metallic.
 - Close other apps, especially anything that plays sound. Keep Wi-Fi on, because the Stage needs the network on a real night.
 - If the TV is connected over HDMI, mute it or disable the HDMI audio device in Windows.
 
@@ -70,6 +72,7 @@ What you measure is input latency plus output latency, the same path a monitored
 | Nothing recorded on the Mic track | Wrong input, track not armed, or input gain at minimum. |
 | Feedback or repeated clicks | Monitoring is on in the Mic track. |
 | The peak sits exactly on `0:01.000` | *Use audio driver reported latency* is still on. |
+| Metallic or robotic sound | Windows' sample rate for the interface differs from REAPER's (step 1), or the voice is monitored twice (step 7). |
 
 ## 5. Other drivers and buffers (optional)
 
@@ -91,7 +94,7 @@ The plugins are up to you. ReaPlugs ship with REAPER, and there are free third-p
 
 ## 7. Singing test
 
-1. Turn monitoring on in the Mic track, move the mic away from the speaker, and sing 2–3 songs over any audio file in REAPER.
+1. Turn monitoring on in the Mic track, move the mic away from the speaker, and sing 2–3 songs over any audio file in REAPER. Keep **a single monitoring path**: with the interface's direct monitoring (or Windows' *Listen to this device*) also on, you hear the voice twice, a few milliseconds apart, and it sounds doubled and robotic.
 2. Do it with the chain on and with it bypassed, and rate the comfort from 1 to 5.
 3. Write down anything that felt late, sounded hollow or phasey (your own voice through the air and the delayed one together), or sounded robotic.
 
@@ -105,6 +108,7 @@ The plugins are up to you. ReaPlugs ship with REAPER, and there are free third-p
 
 With the mic gain at minimum, monitoring off, nothing playing and the speakers at the volume a night needs: is there audible hiss or hum?
 
+- First make sure the interface is plugged straight into the machine (step 1). A USB hub was the main source of hiss in round 1.
 - If it goes away with the machine's charger unplugged, it's a ground loop: put everything on the same power strip, or use a ground loop isolator.
 - If it stays, it comes from the interface's output. Check the gain staging first: the interface output turned up high and the speakers turned down.
 - Hiss that only grows with the input gain comes from the mic preamp. Sing close to the mic (2–5 cm) to need less gain, and use a gate.

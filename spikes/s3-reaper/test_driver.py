@@ -6,12 +6,14 @@ Run from the repo root: python -m unittest discover -s spikes/s3-reaper -v
 import contextlib
 import hashlib
 import io
+import itertools
 import json
 import tempfile
 import unittest
 import wave
 from array import array
 from pathlib import Path
+from unittest import mock
 from urllib.parse import unquote
 
 import driver
@@ -102,7 +104,7 @@ class ParseExtState(unittest.TestCase):
 
 
 class EncodeCommand(unittest.TestCase):
-    COMMAND = {"id": 42, "op": "load", "manifest": "C:\\Songs\\a;b\\song a\\manifest.json"}
+    COMMAND = {"id": 42, "op": "load", "manifest": "C:\\Songs\\a;b/song a\\manifest.json"}
 
     def test_prefix_and_round_trip(self):
         request = driver.encode_command(self.COMMAND)
@@ -116,6 +118,7 @@ class EncodeCommand(unittest.TestCase):
         for char in ";/\\ \"{}:":
             self.assertNotIn(char, value)
         self.assertIn("%3B", value)
+        self.assertIn("%2F", value)
         self.assertIn("%5C", value)
 
     def test_exact_encoding_of_a_small_command(self):
@@ -155,6 +158,90 @@ class Cadence(unittest.TestCase):
         result = driver.cadence(samples)
         self.assertEqual(result["playing_samples"], 2)
         self.assertEqual(result["step_error_ms"]["n"], 1)
+
+    def test_a_stop_breaks_the_pairs(self):
+        # Play for 0.1 s, stop for 5 s, play again for 0.1 s: no pair spans the stop.
+        samples = [
+            (0.0, 1, 0.0), (0.1, 1, 0.1),
+            (0.2, 0, 0.1), (5.2, 0, 0.1),
+            (5.3, 1, 0.1), (5.4, 1, 0.2),
+        ]
+        result = driver.cadence(samples)
+        self.assertEqual(result["playing_samples"], 4)
+        self.assertEqual(result["intervals_ms"]["n"], 2)
+        self.assertAlmostEqual(result["intervals_ms"]["max"], 100.0)
+        self.assertAlmostEqual(result["drift_ms"], 0.0)
+
+
+class FakeReaper(driver.Reaper):
+    """A Reaper whose HTTP layer is a script: no network.
+
+    acks(sent_id) returns the ack values the GET requests see, in order.
+    """
+
+    def __init__(self, acks):
+        super().__init__("127.0.0.1", 8080)
+        self.acks = acks
+        self.sent = []
+        self._replies = None
+
+    def request(self, commands):
+        if commands.startswith("SET/EXTSTATE/karaoke/cmd/"):
+            command = json.loads(unquote(commands[len("SET/EXTSTATE/karaoke/cmd/"):]))
+            self.sent.append(command)
+            self._replies = iter(self.acks(command["id"]))
+            return ""
+        value = next(self._replies, "")
+        return f"EXTSTATE\tkaraoke\tack\t{value}\n"
+
+
+def ack(**fields):
+    return json.dumps(fields).replace("\\", "\\\\")
+
+
+class Send(unittest.TestCase):
+    def test_sends_the_command_with_a_fresh_id(self):
+        reaper = FakeReaper(lambda sent_id: [ack(id=sent_id, op="ping", ok=True, ms=1.0)])
+        reaper.send({"op": "ping"}, timeout_s=1, poll_s=0)
+        reaper.send({"op": "ping"}, timeout_s=1, poll_s=0)
+        first, second = reaper.sent
+        self.assertEqual(first["op"], "ping")
+        self.assertNotEqual(first["id"], second["id"])
+
+    def test_returns_the_ack_with_the_sent_id(self):
+        reaper = FakeReaper(lambda sent_id: [ack(id=sent_id, op="load", ok=True, ms=12.5)])
+        result, rtt_ms = reaper.send({"op": "load", "manifest": "m.json"}, timeout_s=1, poll_s=0)
+        self.assertEqual(result, {"id": reaper.sent[0]["id"], "op": "load", "ok": True, "ms": 12.5})
+        self.assertGreaterEqual(rtt_ms, 0.0)
+
+    def test_skips_the_previous_ack_and_empty_polls(self):
+        # The previous command's ack is still in ExtState when the new command lands.
+        reaper = FakeReaper(lambda sent_id: [
+            ack(id=sent_id - 1, op="load", ok=True, ms=1.0),
+            "",
+            ack(id=sent_id, op="load", ok=True, ms=900.0),
+        ])
+        result, _ = reaper.send({"op": "load", "manifest": "m.json"}, timeout_s=1, poll_s=0)
+        self.assertEqual(result["id"], reaper.sent[0]["id"])
+        self.assertEqual(result["ms"], 900.0)
+
+    def test_times_out_when_only_other_ids_arrive(self):
+        reaper = FakeReaper(lambda sent_id: itertools.repeat(ack(id=sent_id - 1, op="load", ok=True, ms=1.0)))
+        with self.assertRaises(TimeoutError):
+            reaper.send({"op": "load", "manifest": "m.json"}, timeout_s=0.05, poll_s=0)
+
+
+class Options(unittest.TestCase):
+    def test_default_host_is_ipv4_loopback(self):
+        args = driver.build_parser().parse_args(["ping"])
+        self.assertEqual(args.host, "127.0.0.1")
+
+    def test_timeout_also_bounds_each_http_request(self):
+        patch = mock.patch.object(driver.Reaper, "send", autospec=True, return_value=({"id": 1}, 1.0))
+        with patch as fake_send, contextlib.redirect_stdout(io.StringIO()):
+            driver.main(["--timeout", "7.5", "ping"])
+        reaper = fake_send.call_args.args[0]
+        self.assertEqual(reaper.timeout_s, 7.5)
 
 
 class TestSongs(unittest.TestCase):

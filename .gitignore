@@ -13,3 +13,6 @@ library/
 *.ckpt
 *.onnx
 *.pth
+
+# REAPER peak caches
+*.reapeaks

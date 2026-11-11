@@ -119,6 +119,8 @@ def find_lyrics(get, track: str, artist: str, album: str | None, duration: float
     """get(path, params) returns (http status, parsed JSON body or None).
 
     route is "get" or "search" for the request that matched, None when nothing did.
+    /api/get can answer 200 with a record that has no lyrics, so that case also
+    searches. The best candidate wins in STATUSES order; on a tie, the first.
     """
     params = {"track_name": track, "artist_name": artist}
     if album:
@@ -126,19 +128,30 @@ def find_lyrics(get, track: str, artist: str, album: str | None, duration: float
     if duration:
         params["duration"] = duration
     status, body = get("/api/get", params)
+    candidates = []
     if status == 200:
-        return {"status": classify(body), "route": "get", "record": _summary(body), "search_hits": None}
-    if status != 404:
+        candidates.append(("get", body))
+        if classify(body) != "none":
+            return _match(candidates, None)
+    elif status != 404:
         raise LrclibError(f"/api/get returned {status}")
 
     status, hits = get("/api/search", {"track_name": track, "artist_name": artist})
     if status != 200:
         raise LrclibError(f"/api/search returned {status}")
     hits = hits or []
-    for hit in hits:
-        if duration is None or (hit.get("duration") is not None and abs(hit["duration"] - duration) <= DURATION_TOLERANCE_S):
-            return {"status": classify(hit), "route": "search", "record": _summary(hit), "search_hits": len(hits)}
-    return {"status": "none", "route": None, "record": None, "search_hits": len(hits)}
+    candidates += [
+        ("search", hit) for hit in hits
+        if duration is None or (hit.get("duration") is not None and abs(hit["duration"] - duration) <= DURATION_TOLERANCE_S)
+    ]
+    return _match(candidates, len(hits))
+
+
+def _match(candidates: list[tuple[str, dict]], search_hits: int | None) -> dict:
+    if not candidates:
+        return {"status": "none", "route": None, "record": None, "search_hits": search_hits}
+    route, best = min(candidates, key=lambda c: STATUSES.index(classify(c[1])))
+    return {"status": classify(best), "route": route, "record": _summary(best), "search_hits": search_hits}
 
 
 def lrclib_get(path: str, params: dict, timeout_s: float = 15.0) -> tuple[int, object]:

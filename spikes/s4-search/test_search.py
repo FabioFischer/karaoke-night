@@ -106,6 +106,44 @@ class FindLyrics(unittest.TestCase):
         self.assertEqual(lrclib.calls[1], ("/api/search", {"track_name": "Song Title", "artist_name": "Artist Name"}))
         self.assertEqual(result["search_hits"], 2)
 
+    def test_get_record_without_lyrics_falls_through_to_search(self):
+        hits = [record(id=6, duration=201.0, syncedLyrics="[00:01.00] a")]
+        lrclib = FakeLrclib({"/api/get": (200, record(id=5)), "/api/search": (200, hits)})
+        result = self.find(lrclib)
+        self.assertEqual((result["status"], result["route"], result["record"]["id"]), ("synced", "search", 6))
+        self.assertEqual([path for path, _ in lrclib.calls], ["/api/get", "/api/search"])
+
+    def test_get_record_without_lyrics_is_kept_when_search_has_nothing_better(self):
+        hits = [record(id=6, duration=200.0)]
+        lrclib = FakeLrclib({"/api/get": (200, record(id=5)), "/api/search": (200, hits)})
+        result = self.find(lrclib)
+        self.assertEqual((result["status"], result["route"], result["record"]["id"], result["search_hits"]), ("none", "get", 5, 1))
+
+    def test_get_record_with_plain_lyrics_does_not_search(self):
+        lrclib = FakeLrclib({"/api/get": (200, record(id=5, plainLyrics="a"))})
+        result = self.find(lrclib)
+        self.assertEqual((result["status"], result["route"]), ("plain", "get"))
+        self.assertEqual(len(lrclib.calls), 1)
+
+    def test_search_picks_the_best_hit_within_tolerance(self):
+        cases = [
+            ([record(id=1), record(id=2, plainLyrics="x"), record(id=3, syncedLyrics="[00:01.00] a")], ("synced", 3)),
+            ([record(id=1, instrumental=True), record(id=2, plainLyrics="x")], ("plain", 2)),
+            ([record(id=1), record(id=2, instrumental=True)], ("instrumental", 2)),
+            ([record(id=1, plainLyrics="x"), record(id=2, plainLyrics="y")], ("plain", 1)),
+        ]
+        for hits, expected in cases:
+            with self.subTest(expected=expected):
+                lrclib = FakeLrclib({"/api/get": NOT_FOUND, "/api/search": (200, hits)})
+                result = self.find(lrclib)
+                self.assertEqual((result["status"], result["record"]["id"]), expected)
+
+    def test_a_better_hit_outside_the_tolerance_does_not_count(self):
+        hits = [record(id=1, plainLyrics="x"), record(id=2, duration=200.0 + search.DURATION_TOLERANCE_S + 1, syncedLyrics="[00:01.00] a")]
+        lrclib = FakeLrclib({"/api/get": NOT_FOUND, "/api/search": (200, hits)})
+        result = self.find(lrclib)
+        self.assertEqual((result["status"], result["record"]["id"]), ("plain", 1))
+
     def test_search_hits_with_the_wrong_duration_are_none(self):
         hits = [record(duration=200.0 + search.DURATION_TOLERANCE_S + 1, syncedLyrics="[00:01.00] a")]
         lrclib = FakeLrclib({"/api/get": NOT_FOUND, "/api/search": (200, hits)})

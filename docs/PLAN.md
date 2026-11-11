@@ -203,9 +203,9 @@ karaoke-night/
 The goal is to remove the big risks before building the app. Each spike has a criterion that decides whether we keep the plan or change course.
 
 **Prerequisites:**
-- [ ] A test set of ~20 songs that reflects what people will actually sing. Include duets with constant harmony, songs heavy on backing vocals, and live recordings that are the best-known version. Keep it in `spikes/songs.local.txt`, which is gitignored.
-- [ ] A dynamic microphone and an audio interface connected to the Stage machine.
-- [ ] Tailscale installed on the Studio and the Stage, on the same account.
+- [x] A test set of ~20 songs that reflects what people will actually sing. Include duets with constant harmony, songs heavy on backing vocals, and live recordings that are the best-known version. Keep it in `spikes/songs.local.txt`, which is gitignored.
+- [x] A dynamic microphone and an audio interface connected to the Stage machine.
+- [x] Tailscale installed on the Studio and the Stage, on the same account.
 
 | # | Spike | Where | How | Pass criterion |
 |---|---|---|---|---|

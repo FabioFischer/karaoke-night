@@ -7,11 +7,11 @@
 *Last updated: 2026-11-11*
 
 - **Phase:** 0 (proofs of concept), in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass, results in §6).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time). Results in §6.
 - **Next:**
   - spike S6 (melody and key), on the songs separated in S2;
-  - S5 (transfer): Tailscale now links both machines;
   - milestone A1 once Phase 0 is done;
+  - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
 ## 1. Goal
@@ -203,9 +203,9 @@ karaoke-night/
 The goal is to remove the big risks before building the app. Each spike has a criterion that decides whether we keep the plan or change course.
 
 **Prerequisites:**
-- [ ] A test set of ~20 songs that reflects what people will actually sing. Include duets with constant harmony, songs heavy on backing vocals, and live recordings that are the best-known version. Keep it in `spikes/songs.local.txt`, which is gitignored.
-- [ ] A dynamic microphone and an audio interface connected to the Stage machine.
-- [ ] Tailscale installed on the Studio and the Stage, on the same account.
+- [x] A test set of ~20 songs that reflects what people will actually sing. Include duets with constant harmony, songs heavy on backing vocals, and live recordings that are the best-known version. Keep it in `spikes/songs.local.txt`, which is gitignored.
+- [x] A dynamic microphone and an audio interface connected to the Stage machine.
+- [x] Tailscale installed on the Studio and the Stage, on the same account.
 
 | # | Spike | Where | How | Pass criterion |
 |---|---|---|---|---|
@@ -261,6 +261,20 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - **Package size:** 64 to 130 MB for songs of 2:40 to 6:14, about 25 to 30 MB per minute.
 
 **S3, round 2 (2026-11-11): pass.** The S2 packages (FLAC) loaded with the S3 listener and driver unchanged. Command to ack round trip: 80 to 182 ms on a warm REAPER, 276 ms for the first load after REAPER started. The listener stopped answering once while tracks were being edited by hand; it worked again after REAPER was restarted. The cause wasn't found.
+
+**S5, round 1 (2026-11-11): pass on the Studio side, with a caveat.** Script and runbook in [`spikes/s5-transfer/`](../spikes/s5-transfer/README.md). The largest S2 package (135.7 MB, a 6:14 song) served by Python's static file server on the Studio and downloaded by the Stage over Tailscale, one file after the other, 3 runs per network. The sha256 of every stem matched the manifest on all 9 runs.
+
+| Network on the Stage | Tailscale path | Time per package (min / median / max) | Median throughput |
+|---|---|---|---|
+| Home LAN, same network as the Studio | direct | 24.8 / 28.2 / 32.0 s | 38.5 Mbit/s |
+| Phone hotspot (4G) | direct, through the home router's public address | 52.0 / 86.3 / 100.0 s | 12.6 Mbit/s |
+
+- **The criterion is a rate:** about 150 MB in a minute is 20 Mbit/s sustained. Over the hotspot only the first run got there (20.9 Mbit/s), and throughput fell on each run after it (12.6, then 10.9).
+- **The Studio's internet upload is not the limit:** three 50 MB uploads from the Studio to a public speed test measured 53 to 57 Mbit/s. The hotspot's mobile link was the bottleneck, so the time depends on the venue's downlink, which a phone hotspot only approximates. Measuring it at the venue goes into the first night (A9).
+- **On the LAN, about 40 Mbit/s is the ceiling** even with both machines at home; the Studio is on Wi-Fi. Not investigated, since the LAN only matters for preloading the library.
+- **Tailscale goes direct even from the mobile network:** `tailscale ping` answered through the relay (DERP) on the first ping only, then through the home router's public address, and stayed direct for every run. No relay slowdown to plan around.
+- **What it means for a new song during the night:** about 2 min of separation (S2) plus 1 to 1.5 min of transfer over a mobile link like this one. The library is preloaded at home, so only songs asked for that night take this path. Opus just for transfer (§8) stays the fallback if the venue's network turns out slower.
+- Each file is a new TCP connection here (8 per package). The Stage downloader in A5 can reuse one connection, which can only help.
 
 ### Phase 1: alpha
 
@@ -322,7 +336,7 @@ Proposed order:
 | Melody tracking misled by backing residue in the lead stem, melisma, or rap and spoken parts | Ignore sections with low confidence or no pitch, and don't score them. Pick the tracker in S6. |
 | Mics pick up the original backing vocals from the speakers, which skews scoring | Dynamic mics and speakers in front of the singers. Measure it when scoring is built. |
 | Feedback with a PA | Dynamic mics, speakers in front of the singers, low cut and a gate in the effects chain. |
-| Slow upload from the Studio | FLAC by default. If needed, high-bitrate Opus just for transfer. |
+| Slow upload from the Studio, or a slow downlink at the venue | FLAC by default. S5 measured 53 to 57 Mbit/s of upload from the Studio, and a phone hotspot as the bottleneck (12.6 Mbit/s median). If the venue's network is that slow, high-bitrate Opus just for transfer. |
 
 ## 9. Open decisions
 

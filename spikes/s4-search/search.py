@@ -17,8 +17,9 @@ Per song, sequentially:
   1. ytmusicapi search with the "songs" filter, first 3 results.
   2. yt-dlp "ytsearch3:" with flat extraction: listing only, no format
      resolution and no download.
-  3. LRCLIB lyrics for the ytmusic #1 result: /api/get with its signature, and
-     on 404 /api/search, taking the first hit within DURATION_TOLERANCE_S.
+  3. LRCLIB lyrics for each of the ytmusic results, by rank: /api/get with its
+     signature, and on 404 or a record without lyrics /api/search, taking the
+     best hit within DURATION_TOLERANCE_S. Requests wait PAUSE_S between them.
 
 Writes results.local.json (everything) and results.local.md (one row per song,
 with an empty verdict column) into --out, then prints a summary. An error on
@@ -175,22 +176,44 @@ def _timed(func, *args):
         return None, _error(error), time.perf_counter() - start
 
 
-def run(songs: list[dict], ytmusic_search, ytdlp_extract, lrclib, pause_s: float = PAUSE_S, log=None) -> list[dict]:
+class Paced:
+    """Wraps get(path, params): waits pause_s before every request but the first,
+    and adds up in request_s the time spent in requests, waits left out."""
+
+    def __init__(self, get, pause_s: float, sleep=time.sleep, clock=time.perf_counter):
+        self.get, self.pause_s, self.sleep, self.clock = get, pause_s, sleep, clock
+        self.started = False
+        self.request_s = 0.0
+
+    def __call__(self, path: str, params: dict):
+        if self.started and self.pause_s:
+            self.sleep(self.pause_s)
+        self.started = True
+        start = self.clock()
+        try:
+            return self.get(path, params)
+        finally:
+            self.request_s += self.clock() - start
+
+
+def lookup_lyrics(lrclib: Paced, rank: int, result: dict) -> dict:
+    before = lrclib.request_s
+    found, error, _ = _timed(
+        find_lyrics, lrclib, result["title"], ", ".join(result["artists"]), result["album"], result["duration_seconds"],
+    )
+    lyrics = {"rank": rank, "seconds": None, "error": error, "status": None, "route": None, "record": None, "search_hits": None}
+    lyrics.update(found or {})
+    lyrics["seconds"] = lrclib.request_s - before
+    return lyrics
+
+
+def run(songs: list[dict], ytmusic_search, ytdlp_extract, lrclib, pause_s: float = PAUSE_S, log=None, sleep=time.sleep) -> list[dict]:
+    lrclib = Paced(lrclib, pause_s, sleep=sleep)
     results = []
     for n, song in enumerate(songs, 1):
-        if n > 1 and pause_s:
-            time.sleep(pause_s)
         yt, yt_error, yt_s = _timed(ytmusic_top, ytmusic_search, song["query"])
         dl, dl_error, dl_s = _timed(ytdlp_top, ytdlp_extract, song["query"])
-
-        lyrics = {"seconds": None, "error": None, "status": None, "route": None, "record": None, "search_hits": None}
-        if yt:
-            first = yt[0]
-            found, lr_error, lr_s = _timed(
-                find_lyrics, lrclib, first["title"], ", ".join(first["artists"]), first["album"], first["duration_seconds"],
-            )
-            lyrics.update(found or {})
-            lyrics.update(seconds=lr_s, error=lr_error)
+        lyrics = [lookup_lyrics(lrclib, rank, r) for rank, r in enumerate(yt or [], 1)]
 
         result = {
             **song,
@@ -201,7 +224,7 @@ def run(songs: list[dict], ytmusic_search, ytdlp_extract, lrclib, pause_s: float
         results.append(result)
         if log:
             log(f"{n:>2}/{len(songs)} {song['line']}: ytmusic {len(result['ytmusic']['results'])} in {yt_s:.2f} s, "
-                f"yt-dlp {len(result['ytdlp']['results'])} in {dl_s:.2f} s, lyrics {lyrics_cell(lyrics)}")
+                f"yt-dlp {len(result['ytdlp']['results'])} in {dl_s:.2f} s, lyrics {lyrics_cells(lyrics)}")
     return results
 
 
@@ -227,9 +250,13 @@ def ytdlp_cell(r: dict) -> str:
 def lyrics_cell(lyrics: dict) -> str:
     if lyrics["error"]:
         return f"error: {lyrics['error']}"
-    if lyrics["status"] is None:
-        return "not checked"
     return f"{lyrics['status']} ({lyrics['route']})" if lyrics["route"] else lyrics["status"]
+
+
+def lyrics_cells(lookups: list[dict]) -> str:
+    if not lookups:
+        return "not checked"
+    return " · ".join(f"{lookup['rank']}: {lyrics_cell(lookup)}" for lookup in lookups)
 
 
 def _top_cells(source: dict, render, count: int) -> list[str]:
@@ -243,11 +270,11 @@ def markdown_row(result: dict) -> str:
     cells = [result["line"]]
     cells += _top_cells(result["ytmusic"], ytmusic_cell, TOP)
     cells += _top_cells(result["ytdlp"], ytdlp_cell, 1)
-    cells += [lyrics_cell(result["lrclib"]), ""]
+    cells += [lyrics_cells(result["lrclib"]), ""]
     return "| " + " | ".join(_cell(c) for c in cells) + " |"
 
 
-HEADER = ("Line as typed", "ytmusic #1", "ytmusic #2", "ytmusic #3", "yt-dlp #1", "LRCLIB", "Verdict")
+HEADER = ("Line as typed", "ytmusic #1", "ytmusic #2", "ytmusic #3", "yt-dlp #1", "LRCLIB by rank", "Verdict")
 
 
 def markdown_table(results: list[dict]) -> str:
@@ -262,17 +289,22 @@ def _median(values: list) -> float | None:
 
 
 def summarize(results: list[dict]) -> dict:
-    counts = {status: 0 for status in STATUSES}
-    counts.update({"not checked": 0, "error": 0})
-    for r in results:
-        lyrics = r["lrclib"]
-        key = "error" if lyrics["error"] else lyrics["status"] or "not checked"
-        counts[key] += 1
-    return {
-        "songs": len(results),
-        "lrclib": counts,
-        "median_seconds": {source: _median([r[source]["seconds"] for r in results]) for source in ("ytmusic", "ytdlp", "lrclib")},
-    }
+    """LRCLIB counts are per ytmusic rank; a rank ytmusic did not return is "not checked".
+
+    The LRCLIB median is per lookup, the others per song.
+    """
+    by_rank = {}
+    for rank in range(1, TOP + 1):
+        counts = {status: 0 for status in STATUSES}
+        counts.update({"not checked": 0, "error": 0})
+        for r in results:
+            lookup = next((lookup for lookup in r["lrclib"] if lookup["rank"] == rank), None)
+            key = "not checked" if lookup is None else "error" if lookup["error"] else lookup["status"]
+            counts[key] += 1
+        by_rank[rank] = counts
+    medians = {source: _median([r[source]["seconds"] for r in results]) for source in ("ytmusic", "ytdlp")}
+    medians["lrclib"] = _median([lookup["seconds"] for r in results for lookup in r["lrclib"]])
+    return {"songs": len(results), "lrclib": by_rank, "median_seconds": medians}
 
 
 def _version(package: str) -> str:
@@ -323,11 +355,12 @@ def main(argv: list[str] | None = None, clients=None) -> None:
     )
     (args.out / "results.local.md").write_text(heading + markdown_table(results), encoding="utf-8")
 
-    counts = ", ".join(f"{k}: {v}" for k, v in summary["lrclib"].items())
     medians = summary["median_seconds"]
     print(f"songs: {summary['songs']}")
-    print(f"LRCLIB: {counts}")
-    print(f"median query time: ytmusic {_fmt_s(medians['ytmusic'])}, yt-dlp {_fmt_s(medians['ytdlp'])}, LRCLIB {_fmt_s(medians['lrclib'])}")
+    for rank, counts in summary["lrclib"].items():
+        print(f"LRCLIB #{rank}: " + ", ".join(f"{k}: {v}" for k, v in counts.items()))
+    print(f"median query time: ytmusic {_fmt_s(medians['ytmusic'])}, yt-dlp {_fmt_s(medians['ytdlp'])}, "
+          f"LRCLIB {_fmt_s(medians['lrclib'])} per lookup")
     print(f"wrote {args.out / 'results.local.json'} and {args.out / 'results.local.md'}")
 
 

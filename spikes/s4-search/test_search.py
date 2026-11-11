@@ -250,7 +250,10 @@ class Render(unittest.TestCase):
             "ytdlp": {"seconds": 1.0, "error": None, "results": [
                 {"id": "v1", "title": "Song Title (Live)", "channel": "Artist Name", "duration": 260.0},
             ]},
-            "lrclib": {"seconds": 0.5, "error": None, "status": "synced", "route": "search", "record": {"id": 1}, "search_hits": 3},
+            "lrclib": [
+                {"rank": 1, "seconds": 0.5, "error": None, "status": "synced", "route": "search", "record": {"id": 1}, "search_hits": 3},
+                {"rank": 2, "seconds": 0.4, "error": None, "status": "none", "route": None, "record": None, "search_hits": 0},
+            ],
         }
         return {**base, **overrides}
 
@@ -261,7 +264,7 @@ class Render(unittest.TestCase):
             " | Song \\| Title · Artist Name · (no album) · 4:05"
             " | "
             " | Song Title (Live) · Artist Name · 4:20"
-            " | synced (search)"
+            " | 1: synced (search) · 2: none"
             " |  |"
         ))
 
@@ -269,7 +272,7 @@ class Render(unittest.TestCase):
         result = self.song_result(
             ytmusic={"seconds": 0.1, "error": "URLError: offline", "results": []},
             ytdlp={"seconds": 0.1, "error": "DownloadError: offline", "results": []},
-            lrclib={"seconds": None, "error": None, "status": None, "route": None, "record": None, "search_hits": None},
+            lrclib=[],
         )
         self.assertEqual(search.markdown_row(result), (
             "| Song Title - Artist Name | error: URLError: offline |  |  | error: DownloadError: offline | not checked |  |"
@@ -280,10 +283,39 @@ class Render(unittest.TestCase):
         self.assertEqual(search.lyrics_cell({"status": "none", "route": None, "error": None}), "none")
         self.assertEqual(search.lyrics_cell({"status": None, "route": None, "error": "LrclibError: 503"}), "error: LrclibError: 503")
 
+    def test_lyrics_cells_name_the_rank(self):
+        lookups = [
+            {"rank": 1, "status": "synced", "route": "get", "error": None},
+            {"rank": 2, "status": "none", "route": None, "error": None},
+            {"rank": 3, "status": None, "route": None, "error": "LrclibError: /api/get returned 503"},
+        ]
+        self.assertEqual(search.lyrics_cells(lookups), "1: synced (get) · 2: none · 3: error: LrclibError: /api/get returned 503")
+        self.assertEqual(search.lyrics_cells([]), "not checked")
+
     def test_table_header_has_a_verdict_column(self):
         header = search.markdown_table([self.song_result()]).splitlines()[0]
         self.assertTrue(header.startswith("| Line as typed |"))
         self.assertTrue(header.endswith("| Verdict |"))
+
+
+class TrackLrclib(FakeLrclib):
+    """Answers each (path, track name) from a table: 404 or no hits when it is not there."""
+
+    def __call__(self, path, params):
+        self.calls.append((path, params))
+        default = NOT_FOUND if path == "/api/get" else (200, [])
+        return self.replies.get((path, params["track_name"]), default)
+
+
+THREE_RESULTS = [
+    dict(YTMUSIC_RESULT, videoId="vid1", title="Track One", artists=[{"name": "Artist One"}], album={"name": "Album One"}, duration_seconds=200),
+    dict(YTMUSIC_RESULT, videoId="vid2", title="Track Two", artists=[{"name": "Artist Two"}], album=None, duration_seconds=230),
+    dict(YTMUSIC_RESULT, videoId="vid3", title="Track Three", artists=[{"name": "Artist Three"}], album={"name": "Album Three"}, duration_seconds=260),
+]
+
+
+def no_entries(url):
+    return {"entries": []}
 
 
 class Run(unittest.TestCase):
@@ -296,40 +328,104 @@ class Run(unittest.TestCase):
             return [YTMUSIC_RESULT]
 
         lrclib = FakeLrclib({"/api/get": (200, record(syncedLyrics="[00:01.00] a"))})
-        results = search.run(self.SONGS, ytmusic, lambda url: {"entries": []}, lrclib, pause_s=0)
+        results = search.run(self.SONGS, ytmusic, no_entries, lrclib, pause_s=0)
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0]["ytmusic"]["error"], "OSError: network down")
-        self.assertIsNone(results[0]["lrclib"]["status"])
-        self.assertEqual(results[1]["lrclib"]["status"], "synced")
+        self.assertEqual(results[0]["lrclib"], [])
+        self.assertEqual([lookup["status"] for lookup in results[1]["lrclib"]], ["synced"])
         self.assertEqual(len(lrclib.calls), 1)
 
-    def test_lyrics_are_looked_up_with_the_first_ytmusic_result(self):
+    def test_lyrics_lookup_joins_all_artists(self):
         lrclib = FakeLrclib({"/api/get": NOT_FOUND, "/api/search": (200, [])})
-        search.run(self.SONGS[:1], lambda query, filter: [YTMUSIC_RESULT], lambda url: {"entries": []}, lrclib, pause_s=0)
+        search.run(self.SONGS[:1], lambda query, filter: [YTMUSIC_RESULT], no_entries, lrclib, pause_s=0)
         self.assertEqual(lrclib.calls[0][1], {
             "track_name": "Song Title", "artist_name": "Artist Name, Guest Name", "album_name": "Album Name", "duration": 200,
         })
 
+    def test_lyrics_are_looked_up_for_each_ytmusic_result_in_rank_order(self):
+        lrclib = TrackLrclib({
+            ("/api/get", "Track One"): (200, record(id=11, syncedLyrics="[00:01.00] a")),
+            ("/api/search", "Track Three"): (200, [record(id=33, duration=261.0, plainLyrics="x")]),
+        })
+        result = search.run(self.SONGS[:1], lambda query, filter: THREE_RESULTS, no_entries, lrclib, pause_s=0)[0]
+        self.assertEqual(
+            [(lookup["rank"], lookup["status"], lookup["route"], (lookup["record"] or {}).get("id")) for lookup in result["lrclib"]],
+            [(1, "synced", "get", 11), (2, "none", None, None), (3, "plain", "search", 33)],
+        )
+        self.assertEqual([params for path, params in lrclib.calls if path == "/api/get"], [
+            {"track_name": "Track One", "artist_name": "Artist One", "album_name": "Album One", "duration": 200},
+            {"track_name": "Track Two", "artist_name": "Artist Two", "duration": 230},
+            {"track_name": "Track Three", "artist_name": "Artist Three", "album_name": "Album Three", "duration": 260},
+        ])
+
     def test_a_lyrics_error_is_recorded(self):
         lrclib = FakeLrclib({"/api/get": (500, None)})
-        result = search.run(self.SONGS[:1], lambda query, filter: [YTMUSIC_RESULT], lambda url: {"entries": []}, lrclib, pause_s=0)[0]
-        self.assertIsNone(result["lrclib"]["status"])
-        self.assertIn("LrclibError", result["lrclib"]["error"])
+        result = search.run(self.SONGS[:1], lambda query, filter: [YTMUSIC_RESULT], no_entries, lrclib, pause_s=0)[0]
+        self.assertEqual(len(result["lrclib"]), 1)
+        self.assertIsNone(result["lrclib"][0]["status"])
+        self.assertIn("LrclibError", result["lrclib"][0]["error"])
+
+    def test_every_lrclib_request_after_the_first_waits(self):
+        sleeps = []
+        lrclib = FakeLrclib({"/api/get": NOT_FOUND, "/api/search": (200, [])})
+        search.run(self.SONGS, lambda query, filter: THREE_RESULTS[:2], no_entries, lrclib, pause_s=0.3, sleep=sleeps.append)
+        self.assertEqual(len(lrclib.calls), 8)
+        self.assertEqual(sleeps, [0.3] * 7)
+
+    def test_the_pause_is_not_counted_as_lyrics_time(self):
+        lrclib = FakeLrclib({"/api/get": NOT_FOUND, "/api/search": (200, [])})
+        result = search.run(self.SONGS[:1], lambda query, filter: [YTMUSIC_RESULT], no_entries, lrclib, pause_s=0.05)[0]
+        self.assertEqual(len(lrclib.calls), 2)
+        self.assertLess(result["lrclib"][0]["seconds"], 0.05)
+
+
+class Pacing(unittest.TestCase):
+    def test_waits_before_every_request_but_the_first_and_times_only_the_requests(self):
+        now = [0.0]
+        events = []
+
+        def sleep(seconds):
+            events.append(("sleep", seconds))
+            now[0] += seconds
+
+        def get(path, params):
+            events.append(("get", path))
+            now[0] += 0.25
+            return NOT_FOUND
+
+        paced = search.Paced(get, 0.3, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(paced("/api/get", {}), NOT_FOUND)
+        paced("/api/search", {})
+        self.assertEqual(events, [("get", "/api/get"), ("sleep", 0.3), ("get", "/api/search")])
+        self.assertAlmostEqual(paced.request_s, 0.5)
+
+
+def counts(**fields):
+    return {"synced": 0, "plain": 0, "instrumental": 0, "none": 0, "not checked": 0, "error": 0, **fields}
 
 
 class Summary(unittest.TestCase):
-    def test_counts_and_medians(self):
-        def song(status, error=None, yt=1.0, dl=2.0, lr=0.5):
-            return {
-                "ytmusic": {"seconds": yt}, "ytdlp": {"seconds": dl},
-                "lrclib": {"seconds": lr, "status": status, "error": error},
-            }
+    def test_counts_per_rank_and_medians(self):
+        def lookup(rank, status, error=None, seconds=0.5):
+            return {"rank": rank, "seconds": seconds, "status": status, "error": error}
 
-        results = [song("synced", yt=1.0), song("synced", yt=3.0), song("plain", yt=2.0), song(None, error="boom", lr=None)]
+        def song(lookups, yt, dl=2.0):
+            return {"ytmusic": {"seconds": yt}, "ytdlp": {"seconds": dl}, "lrclib": lookups}
+
+        results = [
+            song([lookup(1, "synced"), lookup(2, "plain"), lookup(3, "none")], yt=1.0),
+            song([lookup(1, "synced", seconds=0.3), lookup(2, "instrumental", seconds=0.7)], yt=3.0),
+            song([lookup(1, None, error="LrclibError: boom", seconds=0.1)], yt=2.0),
+            song([], yt=4.0),
+        ]
         summary = search.summarize(results)
         self.assertEqual(summary["songs"], 4)
-        self.assertEqual(summary["lrclib"], {"synced": 2, "plain": 1, "instrumental": 0, "none": 0, "not checked": 0, "error": 1})
-        self.assertEqual(summary["median_seconds"]["ytmusic"], 1.5)
+        self.assertEqual(summary["lrclib"], {
+            1: counts(synced=2, error=1, **{"not checked": 1}),
+            2: counts(plain=1, instrumental=1, **{"not checked": 2}),
+            3: counts(none=1, **{"not checked": 3}),
+        })
+        self.assertEqual(summary["median_seconds"]["ytmusic"], 2.5)
         self.assertEqual(summary["median_seconds"]["lrclib"], 0.5)
 
 
@@ -350,7 +446,12 @@ class Main(unittest.TestCase):
             self.assertEqual(data["songs"][0]["line"], "Song Title - Artist Name")
             table = (Path(tmp) / "results.local.md").read_text(encoding="utf-8")
             self.assertIn("| Song Title - Artist Name | Song Title · Artist Name, Guest Name", table)
-            self.assertIn("plain: 1", out.getvalue())
+            self.assertIn("| 1: plain (get) |  |", table)
+            printed = out.getvalue().splitlines()
+            self.assertIn("LRCLIB #1: synced: 0, plain: 1, instrumental: 0, none: 0, not checked: 0, error: 0", printed)
+            self.assertIn("LRCLIB #3: synced: 0, plain: 0, instrumental: 0, none: 0, not checked: 1, error: 0", printed)
+            self.assertEqual(data["summary"]["lrclib"]["1"]["plain"], 1)
+            self.assertEqual([lookup["rank"] for lookup in data["songs"][0]["lrclib"]], [1])
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@
 Usage:
   uv run spikes/s2-separation/separate.py download <video_id> [--out DIR]
   uv run spikes/s2-separation/separate.py separate <mix.wav> --combo A|B|C [--vocals-model F]
-      [--karaoke-model F] [--instruments-model F] [--model-dir DIR] [--out DIR]
+      [--karaoke-model F] [--instruments-model F] [--model-dir DIR] [--overlap N] [--out DIR]
   uv run spikes/s2-separation/separate.py null <manifest.json> [--mix mix.wav]
 
 The cascade follows docs/PLAN.md section 4: each step keeps the model's "vocals"
@@ -57,6 +57,17 @@ STEMS = ("lead", "backing", "drums", "bass", "guitar", "piano", "other")
 INSTRUMENT_STEMS = ("drums", "bass", "guitar", "piano")
 # The largest value a 16-bit sample holds is 32767 / 32768 of full scale.
 PCM16_CEILING = 32_767 / 32_768
+# audio-separator 0.48.0 scales down, each on its own, every output stem (and an
+# MDXC model's input) that peaks above normalization_threshold. Each model gets
+# its input at HEADROOM so it stays under the threshold, and its outputs are
+# scaled back before the remainders are taken. 0.5 (-6 dB) is exact in float.
+NORMALIZATION_THRESHOLD = 1.0
+HEADROOM = 0.5
+# A rescaled output peaks at the threshold up to float32 rounding.
+THRESHOLD_TOLERANCE = 1e-6
+# The Separator mdxc_params default in audio-separator 0.48.0 (separator.py:142).
+MDXC_DEFAULTS = {"segment_size": 256, "override_model_segment_size": False, "batch_size": None,
+                 "overlap": None, "pitch_shift": 0}
 
 COMBOS = {
     "A": {
@@ -99,20 +110,42 @@ def pick(outputs: dict[str, np.ndarray], stem: str, model: str) -> np.ndarray:
     return by_name[stem]
 
 
-def cascade(mix: np.ndarray, run, models: dict[str, str]) -> dict[str, np.ndarray]:
+def peak(audio: np.ndarray) -> float:
+    return float(np.max(np.abs(audio)))
+
+
+def cascade(mix: np.ndarray, run, models: dict[str, str], levels: dict | None = None) -> dict[str, np.ndarray]:
     """Split mix into the 7 stems.
 
     run(step, model_file, audio) returns the model's outputs by stem name, as
-    (frames, channels) float arrays. Each model output is aligned to the mix
-    length before it is subtracted.
+    (frames, channels) float arrays. Each model gets its input at HEADROOM, and
+    each kept output is scaled back and aligned to the mix length before it is
+    subtracted. levels, when given, gets per step the input and kept output
+    peaks the library saw, and whether either reached its threshold.
     """
     n = len(mix)
-    vocals = align(pick(run("vocals", models["vocals"], mix), "vocals", models["vocals"]), n)
+    levels = {} if levels is None else levels
+
+    def separate_step(step: str, audio: np.ndarray, kept) -> dict[str, np.ndarray]:
+        model = models[step]
+        scaled = audio * HEADROOM
+        outputs = run(step, model, scaled)
+        picked = {stem: pick(outputs, stem, model) for stem in kept}
+        input_peak = peak(scaled)
+        output_peak = max(peak(audio) for audio in picked.values())
+        levels[step] = {
+            "input_peak": round(input_peak, 6),
+            "output_peak": round(output_peak, 6),
+            "reached_threshold": input_peak > NORMALIZATION_THRESHOLD
+            or output_peak >= NORMALIZATION_THRESHOLD - THRESHOLD_TOLERANCE,
+        }
+        return {stem: align(audio / HEADROOM, n) for stem, audio in picked.items()}
+
+    vocals = separate_step("vocals", mix, ["vocals"])["vocals"]
     instrumental = mix - vocals
-    lead = align(pick(run("karaoke", models["karaoke"], vocals), "vocals", models["karaoke"]), n)
+    lead = separate_step("karaoke", vocals, ["vocals"])["vocals"]
     backing = vocals - lead
-    outputs = run("instruments", models["instruments"], instrumental)
-    parts = {stem: align(pick(outputs, stem, models["instruments"]), n) for stem in INSTRUMENT_STEMS}
+    parts = separate_step("instruments", instrumental, INSTRUMENT_STEMS)
     other = instrumental - sum(parts.values())
     return {"lead": lead, "backing": backing, **parts, "other": other}
 
@@ -121,15 +154,18 @@ def fit_headroom(stems: dict[str, np.ndarray]) -> tuple[dict[str, np.ndarray], f
     """Scale every stem by one factor when any would clip in 16 bits.
 
     Returns the stems and gain_db, the gain that restores the original level:
-    stems x 10^(gain_db / 20) still add up to the mix. Without clipping the
-    stems come back unchanged with gain_db 0.
+    stems x 10^(gain_db / 20) still add up to the mix. gain_db is rounded up to
+    3 decimals and the stems are scaled by that rounded value, so the manifest
+    holds the exact gain. Without clipping the stems come back unchanged with
+    gain_db 0.
     """
-    peak = max(float(np.max(np.abs(audio))) for audio in stems.values())
-    if peak <= PCM16_CEILING:
+    loudest = max(peak(audio) for audio in stems.values())
+    if loudest <= PCM16_CEILING:
         return stems, 0.0
-    factor = PCM16_CEILING / peak
+    gain_db = math.ceil(20 * math.log10(loudest / PCM16_CEILING) * 1_000) / 1_000
+    factor = 10 ** (-gain_db / 20)
     scaled = {name: (audio * factor).astype(audio.dtype) for name, audio in stems.items()}
-    return scaled, 20 * math.log10(peak / PCM16_CEILING)
+    return scaled, gain_db
 
 
 def to_pcm16(audio: np.ndarray) -> np.ndarray:
@@ -253,41 +289,62 @@ def stem_from_filename(filename: str, base: str) -> str:
     return match.group(1)
 
 
+def separator_options(model_dir: Path, out_dir: Path, overlap: int | None = None) -> dict:
+    """Keyword arguments for audio-separator's Separator.
+
+    normalization_threshold 1.0 (its default is 0.9) only rescales audio that
+    peaks above full scale. overlap, when given, replaces the MDXC (RoFormer)
+    overlap; without it the library takes the model YAML's num_overlap, else 8.
+    """
+    options = {
+        "log_level": logging.WARNING,
+        "model_file_dir": str(model_dir),
+        "output_dir": str(out_dir),
+        "output_format": "WAV",
+        "use_soundfile": True,
+        "normalization_threshold": NORMALIZATION_THRESHOLD,
+        "sample_rate": SAMPLE_RATE,
+    }
+    if overlap is not None:
+        options["mdxc_params"] = {**MDXC_DEFAULTS, "overlap": overlap}
+    return options
+
+
+def effective_overlap(model_instance) -> int | None:
+    """The overlap a loaded MDXC model runs with, or None for other architectures."""
+    if type(model_instance).__name__ != "MDXCSeparator":
+        return None
+    return model_instance.overlap
+
+
 class AudioSeparatorRunner:
     """Runs one audio-separator model on an array and returns its outputs by stem name.
 
     The input goes to the model as a 32-bit float WAV. audio-separator writes
     its outputs with the input's subtype when use_soundfile is on, so they stay
     float too, with no 16-bit rounding or clipping between steps.
-    normalization_threshold 1.0 (its default is 0.9) only rescales an input or
-    output that peaks above full scale; the remainders keep the sum exact even then.
     """
 
-    def __init__(self, model_dir: Path, work_dir: Path):
+    def __init__(self, model_dir: Path, work_dir: Path, overlap: int | None = None):
         from audio_separator.separator import Separator
 
         self.Separator = Separator
         self.model_dir = model_dir
         self.work_dir = work_dir
+        self.overlap = overlap
         self.last_load_s = None
+        self.last_overlap = None
 
     def __call__(self, step: str, model_file: str, audio: np.ndarray) -> dict[str, np.ndarray]:
         base = f"{step}_input"
         input_path = self.work_dir / f"{base}.wav"
         out_dir = self.work_dir / step
         sf.write(input_path, audio, SAMPLE_RATE, subtype="FLOAT")
-        separator = self.Separator(
-            log_level=logging.WARNING,
-            model_file_dir=str(self.model_dir),
-            output_dir=str(out_dir),
-            output_format="WAV",
-            use_soundfile=True,
-            normalization_threshold=1.0,
-            sample_rate=SAMPLE_RATE,
-        )
+        separator = self.Separator(**separator_options(self.model_dir, out_dir, self.overlap))
         start = time.perf_counter()
         separator.load_model(model_file)
         self.last_load_s = round(time.perf_counter() - start, 2)
+        self.last_overlap = effective_overlap(separator.model_instance)
         # separate() returns file names relative to output_dir.
         files = [out_dir / Path(name).name for name in separator.separate(str(input_path))]
         del separator
@@ -310,6 +367,7 @@ def timed(run, timings: dict):
             "model": model_file,
             "seconds": round(time.perf_counter() - start, 2),
             "load_seconds": getattr(run, "last_load_s", None),
+            "overlap": getattr(run, "last_overlap", None),
             "peak_vram_mb": peak_vram_mb(),
         }
         return outputs
@@ -329,7 +387,10 @@ def separate_song(mix_path: Path, models: dict[str, str], out_dir: Path, run, co
     source = read_source(mix_path)
     mix, _ = sf.read(mix_path, dtype="float32", always_2d=True)
     steps: dict = {}
-    stems = cascade(mix, timed(run, steps), models)
+    levels: dict = {}
+    stems = cascade(mix, timed(run, steps), models, levels)
+    for step, row in levels.items():
+        steps[step].update(row)
     del mix
     write_start = time.perf_counter()
     stems, gain_db = fit_headroom(stems)
@@ -342,6 +403,7 @@ def separate_song(mix_path: Path, models: dict[str, str], out_dir: Path, run, co
         "mix": str(mix_path.resolve()),
         "audio_s": manifest["duration_s"],
         **device_info(),
+        "headroom": HEADROOM,
         "steps": steps,
         "write_seconds": write_s,
         "total_seconds": round(time.perf_counter() - started, 2),
@@ -399,8 +461,14 @@ def resolve_models(args) -> dict[str, str]:
 def _print_report(timings: dict) -> None:
     print(f"device: {timings['device']} (torch {timings['torch']}, CUDA {timings['cuda']})")
     for step, row in timings["steps"].items():
+        overlap = "" if row["overlap"] is None else f"  overlap {row['overlap']}"
         print(f"{step:<12} {row['seconds']:>8.1f} s  load {row['load_seconds']} s  "
-              f"peak VRAM {row['peak_vram_mb']} MB  {row['model']}")
+              f"peak VRAM {row['peak_vram_mb']} MB{overlap}  {row['model']}")
+    for step, row in timings["steps"].items():
+        if row["reached_threshold"]:
+            print(f"warning: {step} reached the normalization threshold at headroom {timings['headroom']} "
+                  f"(input peak {row['input_peak']}, kept output peak {row['output_peak']}); "
+                  f"audio-separator may have rescaled it, so its stems are off in level")
     print(f"{'write':<12} {timings['write_seconds']:>8.1f} s")
     print(f"{'total':<12} {timings['total_seconds']:>8.1f} s for {timings['audio_s']:.1f} s of audio")
     print(f"gain_db: {timings['gain_db']}")
@@ -422,7 +490,7 @@ def cmd_separate(args) -> None:
     source = read_source(args.mix)
     out_dir = args.out or LIBRARY / f"{song_id(source['title'], source['artist'], source['video_id'])}-{args.combo}"
     with tempfile.TemporaryDirectory(prefix="s2-") as work:
-        run = AudioSeparatorRunner(args.model_dir, Path(work))
+        run = AudioSeparatorRunner(args.model_dir, Path(work), args.overlap)
         _, timings = separate_song(args.mix, models, out_dir, run, args.combo)
     _print_report(timings)
     print(f"Wrote {(out_dir / 'manifest.json').resolve()}")
@@ -454,6 +522,9 @@ def build_parser() -> argparse.ArgumentParser:
     separate.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR,
                           help="where models are downloaded and cached (default ~/.cache/audio-separator-models); "
                                "the AUDIO_SEPARATOR_MODEL_DIR environment variable wins over it")
+    separate.add_argument("--overlap", type=int,
+                          help="overlapping windows for the RoFormer (MDXC) models; fewer is faster "
+                               "(default: the model's num_overlap, else 8)")
     separate.add_argument("--out", type=Path, help="package folder "
                           "(default spikes/s2-separation/library/<song_id>-<combo>)")
     separate.set_defaults(func=cmd_separate)

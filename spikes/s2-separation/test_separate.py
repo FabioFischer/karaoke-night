@@ -51,10 +51,11 @@ class FakeSeparator:
     use the case and extra outputs the real models give.
     """
 
-    def __init__(self, vocals_gain=0.6, lead_gain=0.7, extra_frames=3):
+    def __init__(self, vocals_gain=0.6, lead_gain=0.7, drums_gain=0.1, extra_frames=3):
         self.calls = []
         self.vocals_gain = vocals_gain
         self.lead_gain = lead_gain
+        self.drums_gain = drums_gain
         self.extra = extra_frames
 
     def _longer(self, audio):
@@ -69,12 +70,35 @@ class FakeSeparator:
         # Vocals and Other are far off on purpose: the cascade must not use them.
         return {
             "Vocals": audio * 7.0,
-            "Drums": self._longer(audio * 0.1),
+            "Drums": self._longer(audio * self.drums_gain),
             "Bass": audio * 0.2,
             "Guitar": (audio * 0.15)[: -self.extra],
             "Piano": audio * 0.05,
             "Other": audio * 9.0,
         }
+
+
+class LibraryLikeSeparator:
+    """Wraps a separator with what audio-separator 0.48.0 does around a model.
+
+    Every output that peaks above the normalization threshold is scaled down to
+    it on its own (common_separator.py, write_audio_soundfile), and an MDXC
+    model does the same to its input (mdxc_separator.py, separate).
+    """
+
+    def __init__(self, inner, threshold=1.0):
+        self.inner = inner
+        self.threshold = threshold
+
+    def _normalize(self, audio):
+        peak = float(np.max(np.abs(audio)))
+        return audio * (self.threshold / peak) if peak > self.threshold else audio
+
+    def __call__(self, step, model_file, audio):
+        if step in ("vocals", "karaoke"):
+            audio = self._normalize(audio)
+        outputs = self.inner(step, model_file, audio)
+        return {name: self._normalize(out).astype(np.float32) for name, out in outputs.items()}
 
 
 class Align(unittest.TestCase):
@@ -129,9 +153,9 @@ class Cascade(unittest.TestCase):
         self.assertEqual((s2, m2), ("karaoke", MODELS["karaoke"]))
         self.assertEqual((s3, m3), ("instruments", MODELS["instruments"]))
         vocals = self.mix * 0.6
-        np.testing.assert_allclose(in1, self.mix)
-        np.testing.assert_allclose(in2, vocals, atol=1e-6)
-        np.testing.assert_allclose(in3, self.mix - vocals, atol=1e-6)
+        np.testing.assert_allclose(in1, self.mix * separate.HEADROOM)
+        np.testing.assert_allclose(in2, vocals * separate.HEADROOM, atol=1e-6)
+        np.testing.assert_allclose(in3, (self.mix - vocals) * separate.HEADROOM, atol=1e-6)
 
     def test_remainders_ignore_the_instrument_model_vocals_and_other(self):
         vocals = self.mix * 0.6
@@ -150,6 +174,56 @@ class Cascade(unittest.TestCase):
         np.testing.assert_allclose(self.stems["drums"], (self.mix - self.mix * 0.6) * 0.1, atol=1e-6)
 
 
+class LibraryRescaling(unittest.TestCase):
+    """Models whose outputs go above full scale, run through the library's own rescaling."""
+
+    def check_matches_the_unscaled_cascade(self, mix, **gains):
+        expected = separate.cascade(mix, FakeSeparator(**gains), MODELS)
+        levels = {}
+        stems = separate.cascade(mix, LibraryLikeSeparator(FakeSeparator(**gains)), MODELS, levels)
+        for name in separate.STEMS:
+            np.testing.assert_allclose(stems[name], expected[name], atol=1e-6, err_msg=name)
+        np.testing.assert_allclose(sum(stems.values()), mix, atol=1e-6)
+        return levels
+
+    def test_loud_vocals_and_lead_keep_their_level(self):
+        # At full level the vocals peak at 1.17 and the lead at about 1.05.
+        levels = self.check_matches_the_unscaled_cascade(synthetic_mix(seconds=0.25, peak=0.9),
+                                                         vocals_gain=1.3, lead_gain=0.9)
+        self.assertFalse(any(row["reached_threshold"] for row in levels.values()))
+
+    def test_loud_drums_keep_their_level(self):
+        # At full level the instrumental peaks at 1.35 and the drums at about 1.2.
+        levels = self.check_matches_the_unscaled_cascade(synthetic_mix(seconds=0.25, peak=0.9),
+                                                         vocals_gain=-0.5, drums_gain=0.9)
+        self.assertFalse(levels["instruments"]["reached_threshold"])
+
+    def test_levels_report_the_peaks_the_library_saw(self):
+        levels = {}
+        # Loud enough that the vocals peak beats the 0.25 frames the fake appends.
+        separate.cascade(synthetic_mix(seconds=0.25, peak=0.9), LibraryLikeSeparator(FakeSeparator()), MODELS, levels)
+        self.assertEqual(list(levels), ["vocals", "karaoke", "instruments"])
+        self.assertAlmostEqual(levels["vocals"]["input_peak"], 0.9 * separate.HEADROOM, places=4)
+        self.assertAlmostEqual(levels["vocals"]["output_peak"], 0.9 * 0.6 * separate.HEADROOM, places=4)
+        self.assertAlmostEqual(levels["karaoke"]["output_peak"], 0.9 * 0.6 * 0.7 * separate.HEADROOM, places=4)
+
+    def test_ignored_outputs_that_get_rescaled_are_not_reported(self):
+        # The fake's Demucs vocals and other outputs are 7 and 9 times the input.
+        levels = {}
+        separate.cascade(synthetic_mix(seconds=0.25), LibraryLikeSeparator(FakeSeparator()), MODELS, levels)
+        self.assertFalse(levels["instruments"]["reached_threshold"])
+
+    def test_an_output_still_above_full_scale_is_reported(self):
+        # Vocals at 2.5 times the mix go past full scale even at the headroom level.
+        mix = synthetic_mix(seconds=0.25, peak=0.9)
+        levels = {}
+        stems = separate.cascade(mix, LibraryLikeSeparator(FakeSeparator(vocals_gain=2.5)), MODELS, levels)
+        self.assertTrue(levels["vocals"]["reached_threshold"])
+        self.assertAlmostEqual(levels["vocals"]["output_peak"], 1.0, places=5)
+        self.assertFalse(levels["karaoke"]["reached_threshold"])
+        np.testing.assert_allclose(sum(stems.values()), mix, atol=1e-6)
+
+
 class FitHeadroom(unittest.TestCase):
     def test_no_reduction_below_full_scale(self):
         stems = {name: np.full((4, 2), 0.1, dtype=np.float32) for name in separate.STEMS}
@@ -163,12 +237,29 @@ class FitHeadroom(unittest.TestCase):
         stems = {name: np.full((4, 2), 0.2, dtype=np.float32) for name in separate.STEMS}
         stems["other"][1, 1] = -1.5
         fitted, gain_db = separate.fit_headroom(stems)
-        factor = separate.PCM16_CEILING / 1.5
+        factor = 10 ** (-gain_db / 20)
         for name in separate.STEMS:
             np.testing.assert_allclose(fitted[name], stems[name] * factor, rtol=1e-6)
             self.assertEqual(fitted[name].dtype, np.float32)
-        self.assertAlmostEqual(max(float(np.max(np.abs(a))) for a in fitted.values()), separate.PCM16_CEILING, places=6)
-        self.assertAlmostEqual(gain_db, 20 * math.log10(1.5 / separate.PCM16_CEILING))
+        peak = max(float(np.max(np.abs(a))) for a in fitted.values())
+        self.assertLessEqual(peak, separate.PCM16_CEILING)
+        self.assertGreater(peak, separate.PCM16_CEILING * 10 ** (-0.001 / 20))
+
+    def test_gain_db_is_rounded_up_to_3_decimals(self):
+        stems = {name: np.zeros((2, 2), dtype=np.float32) for name in separate.STEMS}
+        stems["bass"][0, 1] = 1.5
+        _, gain_db = separate.fit_headroom(stems)
+        exact = 20 * math.log10(1.5 / separate.PCM16_CEILING)
+        self.assertEqual(gain_db, math.ceil(exact * 1_000) / 1_000)
+        self.assertEqual(gain_db, round(gain_db, 3))
+        self.assertGreaterEqual(gain_db, exact)
+
+    def test_a_tiny_overshoot_still_gets_a_gain(self):
+        stems = {name: np.zeros((2, 2), dtype=np.float32) for name in separate.STEMS}
+        stems["drums"][0, 0] = 1.0
+        fitted, gain_db = separate.fit_headroom(stems)
+        self.assertEqual(gain_db, 0.001)
+        self.assertLessEqual(float(np.max(np.abs(fitted["drums"]))), separate.PCM16_CEILING)
 
     def test_gain_db_restores_the_sum(self):
         stems = {name: np.linspace(-0.3, 0.4, 8, dtype=np.float32).reshape(4, 2) for name in separate.STEMS}
@@ -181,7 +272,8 @@ class FitHeadroom(unittest.TestCase):
         stems = {name: np.zeros((2, 2), dtype=np.float32) for name in separate.STEMS}
         stems["lead"][0, 0] = 2.0
         fitted, _ = separate.fit_headroom(stems)
-        self.assertEqual(int(separate.to_pcm16(fitted["lead"])[0, 0]), 32_767)
+        # Rounding gain_db up costs at most 0.001 dB, under 4 of the 32767 steps.
+        self.assertIn(int(separate.to_pcm16(fitted["lead"])[0, 0]), range(32_763, 32_768))
 
 
 class ToPcm16(unittest.TestCase):
@@ -291,6 +383,16 @@ class NullTest(unittest.TestCase):
         self.assertLessEqual(result["max_abs_error_lsb"], 3.5 * 10 ** (gain_db / 20))
         self.assertLess(result["residual_rms_dbfs"], -80)
 
+    def test_the_manifest_gain_db_is_the_one_the_stems_were_scaled_by(self):
+        # Rounding only the manifest value would add up to about 2 LSB at a
+        # full scale peak, so the stems carry the rounded gain instead.
+        result, gain_db = self._package(synthetic_mix(seconds=1.0, peak=0.9), FakeSeparator(vocals_gain=2.12))
+        manifest = json.loads((self.dir / "pkg" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["gain_db"], gain_db)
+        self.assertEqual(gain_db, round(gain_db, 3))
+        self.assertGreater(gain_db, 0)
+        self.assertLessEqual(result["max_abs_error_lsb"], 3.5 * 10 ** (gain_db / 20))
+
     def test_a_wrong_gain_fails_loudly(self):
         self._package(synthetic_mix(seconds=0.5), FakeSeparator())
         manifest_path = self.dir / "pkg" / "manifest.json"
@@ -316,16 +418,50 @@ class SeparateSong(unittest.TestCase):
             self.assertEqual(timings["combo"], "A")
             self.assertEqual(timings["mix"], str(mix_path.resolve()))
             self.assertEqual(list(timings["steps"]), ["vocals", "karaoke", "instruments"])
+            self.assertEqual(timings["headroom"], separate.HEADROOM)
             for step, row in timings["steps"].items():
                 self.assertEqual(row["model"], MODELS[step])
                 self.assertGreaterEqual(row["seconds"], 0)
                 self.assertIsNone(row["peak_vram_mb"])
+                self.assertIsNone(row["overlap"])
+                self.assertGreater(row["input_peak"], 0)
+                self.assertGreater(row["output_peak"], 0)
+                self.assertFalse(row["reached_threshold"])
             self.assertLessEqual(timings["null_test"]["max_abs_error_lsb"], 3.5)
             self.assertEqual(manifest["title"], "Song Title")
 
             with contextlib.redirect_stdout(io.StringIO()) as printed:
                 separate.main(["null", str(out / "manifest.json")])
             self.assertIn("null test: max abs error", printed.getvalue())
+
+
+class MDXCSeparator:
+    """Same class name as the audio-separator MDXC architecture."""
+
+    overlap = 4
+
+
+class DemucsSeparator:
+    overlap = 0.25
+
+
+class SeparatorOptions(unittest.TestCase):
+    def test_without_overlap_the_library_defaults_stay(self):
+        options = separate.separator_options(Path("models"), Path("out"))
+        self.assertNotIn("mdxc_params", options)
+        self.assertEqual(options["normalization_threshold"], separate.NORMALIZATION_THRESHOLD)
+        self.assertEqual(options["model_file_dir"], "models")
+        self.assertEqual(options["output_dir"], "out")
+
+    def test_overlap_goes_to_the_mdxc_params(self):
+        options = separate.separator_options(Path("models"), Path("out"), overlap=2)
+        self.assertEqual(options["mdxc_params"], {"segment_size": 256, "override_model_segment_size": False,
+                                                  "batch_size": None, "overlap": 2, "pitch_shift": 0})
+
+    def test_effective_overlap_reads_mdxc_models_only(self):
+        self.assertEqual(separate.effective_overlap(MDXCSeparator()), 4)
+        self.assertIsNone(separate.effective_overlap(DemucsSeparator()))
+        self.assertIsNone(separate.effective_overlap(None))
 
 
 class StemFromFilename(unittest.TestCase):
@@ -377,6 +513,10 @@ class Options(unittest.TestCase):
 
     def test_every_combo_uses_htdemucs_6s(self):
         self.assertTrue(all(c["instruments"] == "htdemucs_6s.yaml" for c in separate.COMBOS.values()))
+
+    def test_overlap_is_off_by_default(self):
+        self.assertIsNone(self.parse("--combo", "A").overlap)
+        self.assertEqual(self.parse("--combo", "A", "--overlap", "2").overlap, 2)
 
     def test_combo_is_required(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

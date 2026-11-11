@@ -11,7 +11,7 @@ Runbook for spike S2 in [docs/PLAN.md](../../docs/PLAN.md) §6. The separation r
 | File | What it is |
 |---|---|
 | `separate.py` | The command line tool: `download`, `separate` and `null`. Its dependencies are declared inline (PEP 723), so `uv run` builds the environment. |
-| `test_separate.py` | Unit tests with a fake separator: the remainder math, length alignment, the clipping rule, the manifest and the null test on a FLAC round trip. No GPU, no network. |
+| `test_separate.py` | Unit tests with a fake separator: the remainder math, length alignment, the headroom against the library's own rescaling, the clipping rule, the manifest and the null test on a FLAC round trip. No GPU, no network. |
 
 Run the tests from the repo root:
 
@@ -36,8 +36,8 @@ Details that matter for the numbers:
 - **Names, not order.** audio-separator names each output file `<input>_(<Stem>)_<model>.wav`, and the script reads the stem from that name. If a model has no `vocals` output, `separate` stops and lists the names the model gave.
 - **Length.** Model outputs can differ from the mix by a few samples. Each output is trimmed or padded with silence to the mix length before it is subtracted.
 - **No rounding between steps.** Each model gets its input as a 32-bit float WAV, and audio-separator writes its outputs in the input's format, so nothing is rounded or clipped until the final FLACs.
-- **Normalization.** audio-separator rescales any input or output that peaks above its `normalization_threshold`. The script sets it to 1.0 (the library default is 0.9), so only audio above full scale is touched. An instrumental can peak above full scale; Demucs then works on a quieter copy, which changes the split between `other` and the instruments but not the sum.
-- **Clipping (§5.2).** If any stem would clip in 16 bits (remainders can), all 7 stems are scaled by the same factor so the loudest peaks just under full scale, and `gain_db` in the manifest gets the compensation: the stems played at `gain_db` still add up to the mix. Without clipping, `gain_db` is 0.
+- **Headroom against the library's normalization.** audio-separator scales down every output stem that peaks above its `normalization_threshold`, each stem on its own, before writing it; an MDXC (RoFormer) model does the same to its input. The script sets the threshold to 1.0 (the library default is 0.9). A kept output scaled on its own would come back at the wrong level, and the remainder after it (`instrumental`, `backing` or `other`) would absorb the difference. So each model gets its input at half level (`headroom` 0.5, -6 dB, in `timings.json`) and its kept outputs are doubled back before the remainders are taken; outputs that stay under full scale at half level are never touched. A fixed factor is not a guarantee: a model can give an output louder than its input. `timings.json` records per step the peak of the input and of the kept outputs as the library saw them (`input_peak`, `output_peak`), and `reached_threshold` is true when the input went above 1.0 or a kept output reached it; `separate` then prints a warning, and that step's stems are off in level (the sum still holds). Demucs's own `vocals` and `other` are not checked, since they are ignored.
+- **Clipping (§5.2).** If any stem would clip in 16 bits (remainders can), all 7 stems are scaled by the same factor so the loudest peaks just under full scale, and `gain_db` in the manifest gets the compensation: the stems played at `gain_db` still add up to the mix. `gain_db` is rounded up to 3 decimals and the stems are scaled by that rounded value, so the manifest holds the exact gain and the loudest peak lands at most 0.001 dB under the ceiling. Without clipping, `gain_db` is 0.
 
 ## The combos
 
@@ -64,7 +64,7 @@ Run from the repo root.
 
 ```
 uv run spikes/s2-separation/separate.py download <video_id> [--out DIR]
-uv run spikes/s2-separation/separate.py separate <mix.wav> --combo A|B|C [--model-dir DIR] [--out DIR]
+uv run spikes/s2-separation/separate.py separate <mix.wav> --combo A|B|C [--model-dir DIR] [--overlap N] [--out DIR]
 uv run spikes/s2-separation/separate.py null <manifest.json> [--mix mix.wav]
 ```
 
@@ -74,15 +74,19 @@ uv run spikes/s2-separation/separate.py null <manifest.json> [--mix mix.wav]
   ```
   manifest.json      §5.2 format, no lyrics in this spike
   stems/lead.flac  backing.flac  drums.flac  bass.flac  guitar.flac  piano.flac  other.flac
-  timings.json       time and peak VRAM per step, versions, gain_db, null test
+  timings.json       time, peak VRAM, overlap and levels per step, versions, gain_db, null test
   ```
 
   It prints the timings and the null test at the end. The stems are FLAC 16-bit 44.1 kHz stereo, with paths relative to the manifest, so the package loads with the S3 driver as it is.
+
+  `--overlap N` sets how many overlapping windows the RoFormer (MDXC) models of the vocals and karaoke steps average over. Without it the library uses the model's own `num_overlap` from its YAML, or 8 when the YAML has none. Each window advances by `chunk / N`, so the number of model passes, and the time of those two steps, grows with N: a lower N is faster, with possibly more artifacts at the window edges, which only listening tells. The value each step ran with is in `timings.json` (`overlap`) and printed with the timings; it is `null` for Demucs, which `--overlap` does not change. When you compare overlaps, pass `--out` too, so the packages do not land on top of each other.
 - **`null`** reads the FLACs back, sums them, applies `gain_db` and compares with the mix (by default the one recorded in `timings.json`). It prints the largest error (in dBFS and in 16-bit steps, LSB) and the RMS of the residual in dBFS. `separate` runs it at the end.
 
 **What the null test should show.** Each stem is rounded to the nearest 16-bit step, so the sum is off by at most half a step per stem: 3.5 LSB for 7 stems, times the gain when `gain_db` is above 0. On synthetic signals the tests measured a largest error of 2 LSB (about -84 dBFS) and a residual RMS of about -93 dBFS with `gain_db` 0. A residual far above that (say -60 dBFS or louder) means a bug, not rounding.
 
-**Timing.** `seconds` is the wall clock of a step, model load included; `load_seconds` is the load alone. The first run of each model also downloads it, so time a song only after each combo has run once. `peak_vram_mb` is PyTorch's peak reserved memory during the step (`null` when CUDA is not available).
+**What the null test does not show.** The remainders make the stems add up by construction, so a clean null test only proves the package bookkeeping: the subtraction order, the length alignment, `gain_db` and the FLAC writing. It says nothing about the separation itself: a stem shifted in time, voice leaking into the instruments, or lead and backing swapped all pass it. Only listening (below) shows those.
+
+**Timing.** `seconds` is the wall clock of a step, model load included; `load_seconds` is the load alone. The first run of each model also downloads it, so time a song only after each combo has run once. `peak_vram_mb` is PyTorch's peak reserved memory during the step (`null` when CUDA is not available). It leaves out the CUDA context and anything outside PyTorch's allocator, so for GPU planning compare it with the memory `nvidia-smi` shows while a step runs.
 
 ## Listening on the Stage
 

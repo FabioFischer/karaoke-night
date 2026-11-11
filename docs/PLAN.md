@@ -7,11 +7,11 @@
 *Last updated: 2026-11-11*
 
 - **Phase:** 0 (proofs of concept), in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3 and S4 (all pass, results in §6).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass, results in §6).
 - **Next:**
-  - spikes S2 (separation, in progress on the Studio) and S6 (melody and key, after S2);
-  - S3 again with real FLAC stems once S2 produces them (round 1 used generated WAV files);
+  - spike S6 (melody and key), on the songs separated in S2;
   - S5 (transfer): Tailscale now links both machines;
+  - milestone A1 once Phase 0 is done;
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
 ## 1. Goal
@@ -36,8 +36,8 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Languages | Python 3.12 (with `uv`) for the Studio and the Stage. TypeScript, React and Vite for the UI. Lua for REAPER scripts. | The audio and ML ecosystem is Python. |
 | Search | `ytmusicapi` (YouTube Music, "songs" filter), falling back to `yt-dlp ytsearch`. | Returns the official studio audio with a clean title, artist and duration. |
 | Download | `yt-dlp` (best audio) with `ffmpeg`, on the Studio. | That's where the audio is processed. |
-| Separation | `audio-separator` cascade (RoFormer → Karaoke model → Demucs 6s). The exact models are chosen in Phase 0. | Best open-source quality available today. |
-| Stem format | FLAC 16-bit/44.1 kHz, in a package with a `manifest.json`. | Lossless. Roughly 100–200 MB per song (to be measured). |
+| Separation | `audio-separator` cascade: vocals with Mel-Band RoFormer Kim (`vocals_mel_band_roformer.ckpt`), lead from those vocals with the becruily Mel-Band karaoke model (`mel_band_roformer_karaoke_becruily.ckpt`), and instruments with Demucs `htdemucs_6s`. RoFormer overlap 2. Chosen in S2. | Best lead vs backing split of the three combinations tested, and the fastest. |
+| Stem format | FLAC 16-bit/44.1 kHz, in a package with a `manifest.json`. | Lossless. About 25 to 30 MB per minute of song (S2). |
 | Lyrics | LRCLIB, line-synced, **already in the alpha**. | The API is free, and karaoke without lyrics doesn't work. |
 | Player | REAPER with a fixed session that stays open all night, driven by its built-in web interface (HTTP) and a resident Lua script. | The effects chain stays under full manual control in REAPER. |
 | Storage | SQLite on the Stage (local library and history), plus files on disk. | No infrastructure to run. |
@@ -244,6 +244,24 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - **For A7:** look up lyrics for the version the singer picks, not for the first result. `/api/get` can answer 200 with an empty record (no synced, plain or instrumental lyrics), so treat that like a miss and fall back to `/api/search`, keeping the best hit within the duration tolerance (2 s, the same as `/api/get`).
 - **Times:** median per query of 0.64 s (ytmusicapi), 0.82 s (yt-dlp) and 0.29 s (LRCLIB).
 
+**S2, round 1 (2026-11-11): pass.** Script and runbook in [`spikes/s2-separation/`](../spikes/s2-separation/README.md). Five test songs from S4 (a pop song with stacked lead vocals, a rock song with two-part harmonies, a live duet in constant harmony, a male and female duet, a disco song heavy on backing vocals), each through three combinations, all with `htdemucs_6s` for the instruments. audio-separator 0.48.0, torch 2.14.1 (CUDA 13.0) on the Studio.
+
+| Combination | Vocals | Karaoke (lead) | Time, share of song length |
+|---|---|---|---|
+| A | BS-RoFormer viperx (`model_bs_roformer_ep_317_sdr_12.9755`) | Mel-Band aufr33/viperx | 0.77 to 0.79 |
+| **B (chosen)** | **Mel-Band RoFormer Kim** | **Mel-Band becruily** | **0.55 to 0.57** |
+| C | Mel-Band RoFormer Kim | BS-RoFormer frazer-becruily | 0.65 to 0.67 |
+
+- **Listening (on the Stage, through REAPER):** all stems on sounds the same as the original release. B splits lead from backing best. On the song with stacked lead vocals, A and C sent nearly all of the chorus to backing, with voices slipping between layers, while B kept the main voice in lead and put the extra layers in backing, with a little lead left in the chorus, which is acceptable. On the two-part harmonies B was spot on. On the live duet the audience went to backing and the lead was good; what hurt was the live mix itself, so picking a studio recording when one exists is a choice made when the song is chosen, not in code.
+- **Time, combination B:** 92 s for a 2:40 song up to 204 s for a 6:14 song, about 2 min 10 s for a 4 min song. Vocals and karaoke take about 40% each, Demucs about 12%. Model loading adds 2 to 3 s per model. The RoFormer default overlap is 4: overlap 2 halved the time with no audible difference (listened on one song), so overlap 2 is the setting.
+- **VRAM:** peak memory reserved by PyTorch was 3.7 GB for the vocals step and 5.3 GB for the becruily karaoke step (Demucs 0.8 GB). That excludes the CUDA context, so a GPU with 8 GB should be enough; to be confirmed if a smaller GPU is ever used.
+- **Stems add up to the mix:** on all 15 runs, the sum of the 7 written FLAC stems times `gain_db` matched the mix within 3.4 to 4.3 LSB at most, with the residual RMS between -90 and -93 dBFS. This only proves the package bookkeeping (subtraction order, alignment, `gain_db`, FLAC rounding), not the quality of the split, which only listening shows.
+- **audio-separator rescales loud outputs on its own:** every output stem above full scale is scaled down to it, each by its own factor, before it is written. That shifted level between stems (drums came out about 1.8 dB low on one song, and the difference landed in `other`) and the sum still matched, so the null test can't see it. The fix: each model gets its input at -6 dB and its outputs are scaled back up, so nothing reaches full scale inside the library. A step that still reaches it is reported (none of the 15 did). On combination B the stems then needed a common `gain_db` of 0.4 to 2.5 dB to fit in 16 bits, as §5.2 planned.
+- **audio-separator 0.48.0 needs `audioread`**, which it doesn't declare, and the `[gpu]` or `[cpu]` extra for onnxruntime. Downloading the source audio took 9 to 15 s per song.
+- **Package size:** 64 to 130 MB for songs of 2:40 to 6:14, about 25 to 30 MB per minute.
+
+**S3, round 2 (2026-11-11): pass.** The S2 packages (FLAC) loaded with the S3 listener and driver unchanged. Command to ack round trip: 80 to 182 ms on a warm REAPER, 276 ms for the first load after REAPER started. The listener stopped answering once while tracks were being edited by hand; it worked again after REAPER was restarted. The cause wasn't found.
+
 ### Phase 1: alpha
 
 The alpha is a test run, not a finished event. The TV mirrors the Stage screen (over HDMI or screen casting) and is driven with the Stage's keyboard and mouse. There is no queue.
@@ -289,7 +307,7 @@ Proposed order:
 | Audio interface | At least 2 mic preamps and a native ASIO driver (for example Behringer UMC204HD or Focusrite Scarlett 2i2). Without a native driver it still works through ASIO4ALL, at about 22–24 ms round trip (S1). |
 | Speakers | Wired from the interface output. **Never Bluetooth**, which adds 100–200 ms of delay. Enough power to hear the voice over the music without running at full volume. For larger rooms, a PA with a line input. |
 | Stage machine | High-performance power plan, plugged in, validated with LatencyMon. |
-| Studio machine | A CUDA-capable NVIDIA GPU. VRAM requirements get confirmed in S2. |
+| Studio machine | A CUDA-capable NVIDIA GPU. S2 peaked at 5.3 GB reserved by PyTorch (combination B), so 8 GB of VRAM should be enough. |
 
 ## 8. Risks
 
@@ -308,7 +326,7 @@ Proposed order:
 
 ## 9. Open decisions
 
-- [ ] Separation models (from S2)
+- [x] Separation models (from S2: combination B, see §3)
 - [ ] Pitch tracker and key detection method (from S6)
 - [ ] Loudness target between songs (LUFS)
 - [ ] Hardware recommendations confirmed (from S1 and sound tests)

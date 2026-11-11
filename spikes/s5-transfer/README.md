@@ -4,14 +4,14 @@ Runbook for spike S5 in [docs/PLAN.md](../../docs/PLAN.md) §6. The Studio serve
 
 **What it answers:** how long a whole song package (§5.2: the manifest and its 7 stems) takes to go from the Studio to the Stage over Tailscale, whether the connection is direct or goes through a DERP relay, and whether every file arrives intact (its sha256 matches the manifest).
 
-**Pass criterion:** a ~150 MB package downloads in under ~1 min from a remote network. The largest real package available is about 130 MB, so use that one.
+**Pass criterion:** a ~150 MB package downloads in under ~1 min from a remote network, that is **20 Mbit/s sustained** (150 MB in 60 s). The largest real package available is about 130 MB, so use that one and judge it by its Mbit/s, not by its time alone.
 
 ## Files
 
 | File | What it is |
 |---|---|
 | `transfer.py` | The command line tool: `serve` on the Studio, `fetch` on the Stage. Python standard library only (3.11 or later). |
-| `test_transfer.py` | Tests against a real server on `127.0.0.1` with a placeholder package: identical bytes, totals, throughput math, a hash mismatch reported without stopping the run, a path outside the library not served, and the record the CLI appends. No other network. |
+| `test_transfer.py` | Tests against a real server on `127.0.0.1` with a placeholder package: identical bytes, totals, throughput math, a hash mismatch reported without stopping the run, a path outside the library not served, the address the server listens on, and the record the CLI writes, including after a run that fails. No other network. |
 
 Run the tests from the repo root:
 
@@ -21,11 +21,11 @@ PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s spikes/s5-transfer -v
 
 ## How it works
 
-- **`serve <library_dir> --bind <ip> [--port 8765]`** is Python's own static file server (`ThreadingHTTPServer` with `SimpleHTTPRequestHandler`) rooted at the library folder. It answers GET and HEAD only, and a path that tries to leave the folder (`..`) gets 404. `--bind` is required, so it only listens on the address you name. It has **no token**: in this spike the tailnet, plus the firewall rule below, is the boundary. The token (§5.3) comes with the Studio API in milestone A4.
-- **`fetch <base_url> <song_id> [--runs N] [--out DIR] [--label TEXT] [--keep]`** runs N times. Each run gets `<base_url>/<song_id>/manifest.json`, then every stem file the manifest lists, one after the other, into a fresh folder under `--out` (default: the system temp folder). Each file is streamed to disk in 1 MiB chunks while its sha256 is computed. After the run the folder is deleted, unless `--keep`.
-- **Times** come from `time.perf_counter`. A file's time runs from its request to its last byte. The run's total time and total bytes include the manifest. Throughput is in MB/s, where **1 MB is 10^6 bytes**, and in Mbit/s (10^6 bits).
+- **`serve <library_dir> --bind <ip> [--port 8765]`** is Python's own static file server (`ThreadingHTTPServer` with `SimpleHTTPRequestHandler`) rooted at the library folder. It answers GET and HEAD only, and requests cannot reach files outside the folder. `--bind` is required, so it only listens on the address you name. It has **no token**: in this spike the tailnet, plus the firewall rule below, is the boundary. The token (§5.3) comes with the Studio API in milestone A4. Directory listing is on, so serving the whole `spikes/s2-separation/library` also exposes its `downloads/` folder (source audio) and `timings.json` to the tailnet. That is within this spike's scope, since the tailnet is the boundary, but keep the server up only for the runs.
+- **`fetch <base_url> <song_id> [--runs N] [--out DIR] [--label TEXT] [--keep]`** runs N times. Each run gets `<base_url>/<song_id>/manifest.json`, then every stem file the manifest lists, one after the other, into a fresh folder under `--out` (default: the system temp folder). Each file is streamed to disk in 1 MiB chunks while its sha256 is computed. After the run the folder is deleted, unless `--keep`, also when the run fails.
+- **Times** come from `time.perf_counter`. A file's time runs from its request to its last byte. The run's total time and total bytes include the manifest. Throughput is in MB/s, where **1 MB is 10^6 bytes**, and in Mbit/s (10^6 bits). Each file opens its own TCP connection (8 per run), each with its own handshake and slow start, so the times lean high: the measure is conservative.
 - **Hashes.** Each file's sha256 is compared with the manifest. A mismatch is reported (per file, and `MISMATCH in <stems>` in the run line) and the run goes on; it does not stop the tool.
-- Nothing more: no retries, no resume, no parallel downloads. A network error stops `fetch` with the Python error.
+- Nothing more: no retries, no resume, no parallel downloads. A network error stops `fetch` with the Python error; the runs that finished before it are already in the results file.
 
 `fetch` prints one block per run and the spread across runs:
 
@@ -37,7 +37,7 @@ run 1/3: 7 stems + manifest, 131.204 MB in 42.118 s, 3.12 MB/s, 24.9 Mbit/s, sha
 total seconds over 3 runs: min 40.551, median 42.118, max 47.930
 ```
 
-(The numbers above are made up, to show the format.) Then it appends one record to `spikes/s5-transfer/results.local.json` (gitignored): UTC timestamp, label, base URL, song id, and every run with its per-file bytes, seconds, throughput and hashes.
+(The numbers above are made up, to show the format.) It appends one record to `spikes/s5-transfer/results.local.json` (gitignored) and rewrites it as each run ends, so every finished run is on disk: UTC timestamp, label, base URL, song id, and every run with its per-file bytes, seconds, throughput and hashes.
 
 ## What you need
 
@@ -75,12 +75,12 @@ tailscale ping <studio>
 python spikes/s5-transfer/transfer.py fetch http://100.x.y.z:8765 <song_id> --runs 3 --label "home lan"
 ```
 
-`tailscale ping` says whether the path is direct (`via <ip>:<port>`) or through a relay (`via DERP(<region>)`). Write that down for each network.
+`tailscale ping` says whether the path is direct (`via <ip>:<port>`) or through a relay (`via DERP(<region>)`). The first ping or so usually goes over DERP while a direct path is found, and it stops once one is, so write down the **last** line for each network.
 
 ## 4. Remote network (Stage on a phone hotspot)
 
 1. Switch the Stage's network to a phone hotspot (turn off its home Wi-Fi and cable, so it cannot fall back to them).
-2. Check the path: `tailscale ping <studio>`. Note direct or DERP, and the latency it reports.
+2. Check the path: `tailscale ping <studio>`. Note direct or DERP from the last line, and the latency it reports.
 3. Run:
 
    ```

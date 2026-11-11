@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+import urllib.error
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 from unittest import mock
@@ -19,17 +20,21 @@ from unittest import mock
 import transfer
 
 SONG_ID = "song-title--artist-name--a1b2c3"
-STEMS = {"lead": 300_000, "backing": 120_000, "drums": 1}
+STEMS = {"lead": 2_500_000, "backing": 120_000, "drums": 1}
 
 
 def write_package(library: Path, stems: dict[str, int]) -> dict[str, bytes]:
-    """Placeholder package: each stem is size bytes of a fixed pattern."""
+    """Placeholder package: each stem is size bytes of a fixed pattern.
+
+    lead is larger than transfer.CHUNK, so streaming it takes several reads.
+    """
     package = library / SONG_ID
     (package / "stems").mkdir(parents=True)
     contents = {}
     manifest_stems = {}
     for index, (name, size) in enumerate(stems.items()):
-        data = bytes((index * 7 + i) % 251 for i in range(size))
+        pattern = bytes((index * 7 + i) % 251 for i in range(251))
+        data = (pattern * (size // 251 + 1))[:size]
         file = f"stems/{name}.flac"
         (package / file).write_bytes(data)
         contents[file] = data
@@ -62,7 +67,11 @@ class ServedLibrary(unittest.TestCase):
         out.mkdir(exist_ok=True)
         return transfer.fetch_run(self.base_url, SONG_ID, out), out
 
+    def test_the_server_listens_on_the_address_given(self):
+        self.assertEqual(self.server.server_address[0], "127.0.0.1")
+
     def test_downloaded_files_are_identical(self):
+        self.assertGreater(STEMS["lead"], 2 * transfer.CHUNK)
         run, out = self.fetch()
         for file, data in self.contents.items():
             self.assertEqual((out / file).read_bytes(), data)
@@ -141,6 +150,34 @@ class ServedLibrary(unittest.TestCase):
         self.assertEqual(len(record["runs"][0]["files"]), len(STEMS))
         self.assertEqual(list(out.iterdir()), [])
 
+    def test_cli_fetch_failure_keeps_the_runs_done_and_deletes_the_failed_run(self):
+        results = self.tmp / "results.local.json"
+        out = self.tmp / "cli-out"
+        real_fetch_run = transfer.fetch_run
+        calls = []
+
+        def fetch_run(*args):
+            calls.append(args)
+            if len(calls) == 2:
+                (self.library / SONG_ID / "stems" / "backing.flac").unlink()
+            return real_fetch_run(*args)
+
+        with (
+            mock.patch.object(transfer, "RESULTS", results),
+            mock.patch.object(transfer, "fetch_run", fetch_run),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(urllib.error.HTTPError) as raised,
+        ):
+            transfer.main(["fetch", self.base_url, SONG_ID, "--runs", "3", "--out", str(out), "--label", "drop"])
+        self.assertEqual(raised.exception.code, 404)
+        raised.exception.close()
+        self.assertEqual(len(calls), 2)
+        (record,) = json.loads(results.read_text(encoding="utf-8"))
+        self.assertEqual(record["label"], "drop")
+        self.assertEqual(len(record["runs"]), 1)
+        self.assertTrue(record["runs"][0]["all_match"])
+        self.assertEqual(list(out.iterdir()), [])
+
     def test_cli_fetch_keep_leaves_the_files(self):
         out = self.tmp / "cli-out"
         with mock.patch.object(transfer, "RESULTS", self.tmp / "results.local.json"), contextlib.redirect_stdout(io.StringIO()):
@@ -161,8 +198,8 @@ class Throughput(unittest.TestCase):
 
 class Spread(unittest.TestCase):
     def test_min_median_max_of_total_seconds(self):
-        runs = [{"total_seconds": s} for s in (3.0, 1.0, 2.0)]
-        self.assertEqual(transfer.format_spread(runs), "total seconds over 3 runs: min 1.000, median 2.000, max 3.000")
+        runs = [{"total_seconds": s} for s in (10.0, 1.0, 2.0)]
+        self.assertEqual(transfer.format_spread(runs), "total seconds over 3 runs: min 1.000, median 2.000, max 10.000")
 
 
 class Parser(unittest.TestCase):

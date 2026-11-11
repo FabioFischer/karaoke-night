@@ -10,7 +10,8 @@ library folder. It has no token: in this spike the tailnet is the boundary.
 fetch downloads <base_url>/<song_id>/manifest.json, then every stem file the
 manifest lists, one after the other, streaming each to disk while it computes
 its sha256. A hash that does not match the manifest is reported, and the run
-goes on. Every fetch appends one record to results.local.json next to this file.
+goes on. Every fetch appends one record to results.local.json next to this file
+and rewrites it as each run ends, so a failure keeps the runs already done.
 
 1 MB is 10^6 bytes and 1 Mbit is 10^6 bits.
 
@@ -121,9 +122,11 @@ def format_spread(runs: list[dict]) -> str:
     )
 
 
-def append_result(path: Path, record: dict) -> None:
-    records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-    records.append(record)
+def read_results(path: Path) -> list[dict]:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def write_results(path: Path, records: list[dict]) -> None:
     path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
 
 
@@ -141,23 +144,27 @@ def cmd_serve(args: argparse.Namespace) -> None:
 def cmd_fetch(args: argparse.Namespace) -> None:
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
+    earlier = read_results(RESULTS)
     runs = []
-    for index in range(1, args.runs + 1):
-        out_dir = Path(tempfile.mkdtemp(prefix=f"s5-run{index}-", dir=args.out))
-        run = fetch_run(args.base_url, args.song_id, out_dir)
-        run["out_dir"] = str(out_dir)
-        if not args.keep:
-            shutil.rmtree(out_dir)
-        runs.append(run)
-        print(format_run(index, args.runs, run))
-    print(format_spread(runs))
-    append_result(RESULTS, {
+    record = {
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "label": args.label,
         "base_url": args.base_url,
         "song_id": args.song_id,
         "runs": runs,
-    })
+    }
+    for index in range(1, args.runs + 1):
+        out_dir = Path(tempfile.mkdtemp(prefix=f"s5-run{index}-", dir=args.out))
+        try:
+            run = fetch_run(args.base_url, args.song_id, out_dir)
+        finally:
+            if not args.keep:
+                shutil.rmtree(out_dir)
+        run["out_dir"] = str(out_dir)
+        runs.append(run)
+        write_results(RESULTS, earlier + [record])
+        print(format_run(index, args.runs, run))
+    print(format_spread(runs))
     print(f"appended to {RESULTS}")
 
 

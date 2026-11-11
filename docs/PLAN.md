@@ -4,12 +4,13 @@
 
 ## Status
 
-*Last updated: 2026-11-10*
+*Last updated: 2026-11-11*
 
 - **Phase:** 0 (proofs of concept), in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1 (pass, results in §6).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1 and S3 (both pass, results in §6).
 - **Next:**
-  - spikes S3 (REAPER), S4 (search and lyrics), S2 (separation) and S6 (melody and key). S3 needs only REAPER on the Stage; S4 and S2 need the test song list;
+  - spikes S4 (search and lyrics), S2 (separation) and S6 (melody and key). S4 and S2 need the test song list;
+  - S3 again with real FLAC stems once S2 produces them (round 1 used generated WAV files);
   - S5 (transfer) once Tailscale is set up on both machines;
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -161,12 +162,13 @@ Every route requires `Authorization: Bearer <token>`.
 **Lua listener**, for anything the web interface doesn't cover. It runs in a `defer` loop, started by `__startup.lua` when REAPER opens.
 
 - **Request:** the Stage sets `SET/EXTSTATE/karaoke/cmd/<URL-encoded JSON>`, for example `{"id": 42, "op": "load", "manifest": "C:\\...\\manifest.json"}`.
-- **Reply:** the listener runs the command and writes `{"id": 42, "ok": true}` to `karaoke/ack`. The Stage reads it with `GET/EXTSTATE/karaoke/ack`.
+- **Reply:** the listener runs the command and writes `{"id": 42, "ok": true}` to `karaoke/ack`. The Stage reads it with `GET/EXTSTATE/karaoke/ack` and matches the `id`.
+- **One command at a time:** `cmd` and `ack` are single slots, so the Stage sends the next command only after the previous ack.
 - **Operations:**
-  - `load`: removes the previous song's items, inserts each stem on the track of the same name, applies `gain_db` and sets the project end.
+  - `load`: removes the previous song's items, inserts each stem on the track of the same name and applies `gain_db`. The project end follows the stems, as long as nothing else on the timeline runs longer (an item left on a mic track would).
   - `transpose`: shifts the key on every stem **except drums**. Drums have no key, and pitch shifting only degrades them. It is sent at setup, before playback starts.
 
-**Session template:** "stop playback at end of project" is enabled, and the mic tracks are armed with input monitoring on. The effects chain on the mic tracks is left to the person running REAPER (§3).
+**Session template:** "stop playback at end of project" is enabled, the mic tracks are armed with input monitoring on, and the stem tracks have input monitoring off (tracks created with REAPER's defaults inherit the user's default, which can be on). The effects chain on the mic tracks is left to the person running REAPER (§3).
 
 ### 5.5 Repository layout
 
@@ -224,6 +226,15 @@ The goal is to remove the big risks before building the app. Each spike has a cr
   - Windows had the interface at a different sample rate from REAPER's 44.1 kHz, so ASIO4ALL was resampling. Plugging the interface into another USB port makes Windows see a new device, with the default sample rate and ASIO4ALL's default buffer (512 samples, about 57 ms round trip), so both have to be set again;
   - the voice was monitored twice (REAPER's input monitoring plus another monitoring path), which sounds doubled and robotic.
 - These become setup rules for the template and the first-night checklist (A6, A9).
+
+**S3, round 1 (2026-11-11): pass.** Listener, driver and runbook in [`spikes/s3-reaper/`](../spikes/s3-reaper/README.md). Two generated test songs, 7 WAV stems of 240 s each, on the Stage machine of S1.
+
+- **Load:** 80 loads alternating two songs, with the mic monitored and someone singing into it: no audible dropout, and no failed load. Command to ack round trip: median 64 to 84 ms, max 101 ms (the first, cold load took 164 ms). The listener's own work: 12 to 19 ms. The 2 s target has a wide margin.
+- **Mute per stem, transpose +2 while playing:** both worked by ear, with no crackle. CPU peaked at 3% with 6 stems pitch shifted.
+- **Position:** `TRANSPORT` polled every 100 ms answered every ~95 ms (median), each step within about 15 ms of the wall clock (33 ms worst case while transposed), with under 7 ms of drift over 8 s. Enough for line-synced lyrics.
+- **The web interface listens on IPv4 only** (`0.0.0.0:8080`). On Windows, `localhost` tries IPv6 first and every request waits about 2 s, so the Stage must use `127.0.0.1`.
+- Confirmed against the running REAPER: the request encoding (`;`, `/` and `\` inside the JSON survive) and the escaping of `GET/EXTSTATE` replies. Tracks without a stem name, like the mic track, kept their items.
+- For A6: new stem tracks inherited input monitoring on from the user's defaults (see the session template in §5.4), and stem tracks are found by name only, so a user track named like a stem would be overwritten. Both are template decisions for A6.
 
 ### Phase 1: alpha
 

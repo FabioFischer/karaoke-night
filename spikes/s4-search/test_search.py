@@ -42,8 +42,11 @@ class ParseSongs(unittest.TestCase):
         self.assertEqual((song["title"], song["artist"], song["query"]), ("Song Title Only", "", "Song Title Only"))
 
     def test_strips_a_byte_order_mark_and_line_endings(self):
-        songs = search.parse_songs("﻿Song Title - Artist Name\r\nOther Song - Other Artist\r\n")
-        self.assertEqual([s["artist"] for s in songs], ["Artist Name", "Other Artist"])
+        songs = search.parse_songs("\ufeffSong Title - Artist Name\r\nOther Song - Other Artist\r\n")
+        self.assertEqual([(s["line"], s["title"], s["artist"], s["query"]) for s in songs], [
+            ("Song Title - Artist Name", "Song Title", "Artist Name", "Song Title Artist Name"),
+            ("Other Song - Other Artist", "Other Song", "Other Artist", "Other Song Other Artist"),
+        ])
 
 
 def record(**fields):

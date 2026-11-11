@@ -7,11 +7,11 @@
 *Last updated: 2026-11-11*
 
 - **Phase:** 0 (proofs of concept), in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1 and S3 (both pass, results in §6).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3 and S4 (all pass, results in §6).
 - **Next:**
-  - spikes S4 (search and lyrics), S2 (separation) and S6 (melody and key). S4 and S2 need the test song list;
+  - spikes S2 (separation, in progress on the Studio) and S6 (melody and key, after S2);
   - S3 again with real FLAC stems once S2 produces them (round 1 used generated WAV files);
-  - S5 (transfer) once Tailscale is set up on both machines;
+  - S5 (transfer): Tailscale now links both machines;
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
 ## 1. Goal
@@ -235,6 +235,14 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - **The web interface listens on IPv4 only** (`0.0.0.0:8080`). On Windows, `localhost` tries IPv6 first and every request waits about 2 s, so the Stage must use `127.0.0.1`.
 - Confirmed against the running REAPER: the request encoding (`;`, `/` and `\` inside the JSON survive) and the escaping of `GET/EXTSTATE` replies. Tracks without a stem name, like the mic track, kept their items.
 - For A6: new stem tracks inherited input monitoring on from the user's defaults (see the session template in §5.4), and stem tracks are found by name only, so a user track named like a stem would be overwritten. Both are template decisions for A6.
+
+**S4, round 1 (2026-11-11): pass.** Script and runbook in [`spikes/s4-search/`](../spikes/s4-search/README.md). 21 test songs typed by hand (typos kept), in more than one language, with duets, live recordings and songs that have many covers. ytmusicapi 1.12.3, yt-dlp 2026.10.26.
+
+- **Search:** the right version was in the ytmusicapi top 3 for 21 of 21 songs, and first for 20. The one miss at #1 was a different song by the same artist, with the right one at #2. Typos in titles and artist names didn't hurt. Two of the chosen versions are live recordings, and both ranked first. Covers, tributes, karaoke tracks and lullaby versions fill ranks 2 and 3, so the TV must show artist, album and duration to tell them apart.
+- **yt-dlp as the fallback:** its #1 is usually the official music video, often with a different length or mix from the studio audio. That confirms ytmusicapi as the main source. Search with flat extraction needs no JS runtime; downloading does (`yt-dlp[default]` with its challenge solver, plus Deno), which worked on the Studio.
+- **Lyrics:** LRCLIB had line-synced lyrics for 21 of 21 chosen versions, all on the first request (`/api/get` with title, artist, album and duration). Ranks 2 and 3 had far less (13 and 9 synced), as expected for covers.
+- **For A7:** look up lyrics for the version the singer picks, not for the first result. `/api/get` can answer 200 with an empty record (no synced, plain or instrumental lyrics), so treat that like a miss and fall back to `/api/search`, keeping the best hit within the duration tolerance (2 s, the same as `/api/get`).
+- **Times:** median per query of 0.64 s (ytmusicapi), 0.82 s (yt-dlp) and 0.29 s (LRCLIB).
 
 ### Phase 1: alpha
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from core.manifest import Manifest, YouTubeMusicSource
+from core.manifest import FileSource, Manifest, YouTubeMusicSource
 from pydantic import ValidationError
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -233,6 +233,43 @@ def test_schema_2_is_rejected() -> None:
 def test_unknown_source_type_is_rejected() -> None:
     data = manifest_data()
     data["source"] = {"type": "unknown_service", "video_id": "XXXXXXXXXXX"}
+
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(data)
+
+
+FILE_SHA256 = "89abcdef01234567" * 4
+
+
+def test_file_source_is_accepted(tmp_path: Path) -> None:
+    data = manifest_data()
+    data["source"] = {"type": "file", "sha256": FILE_SHA256}
+
+    manifest = Manifest.model_validate(data)
+    path = tmp_path / "manifest.json"
+    manifest.write(path)
+
+    assert manifest.source == FileSource(type="file", sha256=FILE_SHA256)
+    assert json.loads(path.read_text(encoding="utf-8"))["source"] == {
+        "type": "file",
+        "sha256": FILE_SHA256,
+    }
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "file"},
+        {"type": "file", "sha256": FILE_SHA256.upper()},
+        {"type": "file", "sha256": FILE_SHA256[:63]},
+        {"type": "file", "video_id": "XXXXXXXXXXX"},
+        {"type": "youtube_music", "sha256": FILE_SHA256},
+    ],
+    ids=["no-sha256", "uppercase", "63-chars", "video-id", "youtube-sha256"],
+)
+def test_invalid_source_is_rejected(source: dict[str, str]) -> None:
+    data = manifest_data()
+    data["source"] = source
 
     with pytest.raises(ValidationError):
         Manifest.model_validate(data)

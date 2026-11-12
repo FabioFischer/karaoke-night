@@ -132,6 +132,7 @@ library/<song_id>/
 ```
 
 - **`gain_db`:** the gain REAPER applies on playback. Today it holds the headroom compensation from S2 (see Clipping below). Whether it also brings every song to one loudness target is still open, and so is that target in LUFS.
+- **`source`:** where the audio came from, by `type`. `{"type": "youtube_music", "video_id": "…"}` for a YouTube Music video, and `{"type": "file", "sha256": "…"}` for a local audio file, with the sha256 of the file as given (before any conversion). Any other `type` is rejected.
 - **`lyrics`:** optional. It is absent when LRCLIB has no lyrics for the song or the song is instrumental.
 - **Unknown fields are ignored**, not rejected, so an older Stage keeps reading a manifest that a newer `pipeline_version` wrote (for example one that adds melody data). They are also dropped on write: a Stage that loads and then writes a newer manifest loses those fields. Note for A5: the Stage library must account for this, for example by keeping the downloaded `manifest.json` as is.
 - **Paths stay inside the package:** every `file` (stems and lyrics) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.

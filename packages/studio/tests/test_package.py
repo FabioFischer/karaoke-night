@@ -104,9 +104,22 @@ def test_written_package_records_the_lyrics(
         "synced": True,
         "offset_ms": 0,
     }
-    assert (tmp_path / "lyrics.lrc").read_text(encoding="utf-8") == (
-        "[00:01.00] Line one"
-    )
+    assert (tmp_path / "lyrics.lrc").read_bytes() == b"[00:01.00] Line one"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["[00:01.00] Line one\n[00:02.00] Line two\n", "Line one\r\nLine two\r\n"],
+    ids=["lf", "crlf"],
+)
+def test_lyrics_are_written_byte_for_byte(
+    tmp_path: Path, mix, fake_separator, text: str
+) -> None:
+    lyrics = FoundLyrics(file="lyrics.lrc", text=text, synced=True)
+
+    write_test_package(tmp_path, mix, fake_separator(), lyrics)
+
+    assert (tmp_path / "lyrics.lrc").read_bytes() == text.encode("utf-8")
 
 
 def test_written_package_takes_a_file_source(

@@ -72,7 +72,8 @@ def write_package(
         entries[stem] = Stem(file=relative, sha256=sha256_file(out_dir / relative))
     lyrics_entry = None
     if lyrics is not None:
-        (out_dir / lyrics.file).write_text(lyrics.text, encoding="utf-8")
+        # Bytes, not text: text mode would turn LRCLIB's line endings into CRLF on Windows.
+        (out_dir / lyrics.file).write_bytes(lyrics.text.encode("utf-8"))
         lyrics_entry = Lyrics(provider="lrclib", file=lyrics.file, synced=lyrics.synced)
     manifest = Manifest(
         schema_version=1,

@@ -2,7 +2,7 @@
 
 Self-hosted karaoke that plays the **original recordings**, not re-recorded backing tracks. Songs are split into stems with AI source separation, singers choose which stems to keep, and live vocals run through a real effects chain in [REAPER](https://www.reaper.fm).
 
-> **Status:** planning and Phase 0 (proofs of concept). Nothing runnable yet.
+> **Status:** Phase 1 (alpha) in progress.
 
 ## How it works
 

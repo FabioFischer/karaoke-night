@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "pipeline_version": 1,
+  "id": "song-title--artist-name--a1b2c3",
+  "title": "Song Title",
+  "artist": "Artist Name",
+  "duration_s": 245.3,
+  "source": {
+    "type": "youtube_music",
+    "video_id": "XXXXXXXXXXX"
+  },
+  "gain_db": -2.5,
+  "stems": {
+    "lead": {
+      "file": "stems/lead.flac",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "backing": {
+      "file": "stems/backing.flac",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "drums": {
+      "file": "stems/drums.flac",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "bass": {
+      "file": "stems/bass.flac",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "guitar": {
+      "file": "stems/guitar.flac",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "piano": {
+      "file": "stems/piano.flac",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "other": {
+      "file": "stems/other.flac",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  },
+  "models": {
+    "vocals": "vocals-model.ckpt",
+    "karaoke": "karaoke-model.ckpt",
+    "instrumental": "htdemucs_6s"
+  },
+  "created_at": "2026-11-04T20:00:00Z"
+}

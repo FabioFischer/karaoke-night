@@ -7,9 +7,9 @@
 *Last updated: 2026-11-12*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2).
 - **Next:**
-  - milestone A2 (`core` manifest model);
+  - milestone A3 (Studio pipeline CLI);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -109,7 +109,7 @@ library/<song_id>/
   lyrics.lrc
 ```
 
-Draft `manifest.json`:
+`manifest.json` (schema 1). The pydantic model lives in `packages/core/src/core/manifest.py`:
 
 ```json
 {
@@ -131,7 +131,14 @@ Draft `manifest.json`:
 }
 ```
 
-- **`gain_db`:** the gain REAPER applies so that all songs play at the same loudness. The target LUFS is still open.
+- **`gain_db`:** the gain REAPER applies on playback. Today it holds the headroom compensation from S2 (see Clipping below). Whether it also brings every song to one loudness target is still open, and so is that target in LUFS.
+- **`lyrics`:** optional. It is absent when LRCLIB has no lyrics for the song or the song is instrumental.
+- **Unknown fields are ignored**, not rejected, so an older Stage keeps reading a manifest that a newer `pipeline_version` wrote (for example one that adds melody data). They are also dropped on write: a Stage that loads and then writes a newer manifest loses those fields. Note for A5: the Stage library must account for this, for example by keeping the downloaded `manifest.json` as is.
+- **Paths stay inside the package:** every `file` (stems and lyrics) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.
+- **`sha256`:** exactly 64 lowercase hex characters, the hex digest of the file.
+- **No required stem set:** the model accepts any stem names and any number of stems.
+- **`gain_db` and `duration_s`** must be finite numbers: NaN and infinity are rejected.
+- **`created_at`** must carry a time zone; a date without one is rejected. It is stored in UTC with whole seconds, so it is always written as `YYYY-MM-DDTHH:MM:SSZ`, as S2 wrote it: another offset is converted to UTC and fractional seconds are dropped.
 - **Clipping:** if any stem would exceed 0 dBFS when written to FLAC, all stems get the same reduction, compensated in `gain_db`. That way the stems still add up to the original.
 
 ### 5.3 Studio API

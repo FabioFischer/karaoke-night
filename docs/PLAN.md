@@ -8,8 +8,9 @@
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
 - **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2).
+- **In progress:** milestone A3 (Studio pipeline CLI). The code is done: `studio process` takes a YouTube URL, a video id or a local file, and writes a §5.2 package with LRCLIB lyrics. Live validation on the Studio with the 20 test songs is pending.
 - **Next:**
-  - milestone A3 (Studio pipeline CLI);
+  - finish A3 with the live validation, then milestone A4 (Studio API);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 

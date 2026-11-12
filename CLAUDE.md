@@ -29,4 +29,14 @@ The layout is in `docs/PLAN.md` §5.5. Python commands run from the repository r
 | Web build (tsc, then Vite) | `npm run build` |
 | Web dev server | `npm run dev` |
 
+### Studio pipeline
+
+The separation stack (audio-separator, CUDA 13.0 PyTorch, yt-dlp) is an optional extra of the `studio` package, installed only on the Studio machine; `uv sync --all-packages` leaves it out. On the Studio:
+
+1. NVIDIA driver with CUDA 13.0 or later (`nvidia-smi`), `ffmpeg` and `deno` on `PATH` (deno solves YouTube's challenges for yt-dlp).
+2. `uv sync --package studio --extra separation` (more than 2 GB the first time).
+3. `uv run studio process <url|video_id|file> [--library DIR] [--model-dir DIR]`. A local file also needs `--title` and `--artist`. The default library is `library/` in the current folder, which git ignores. Models download on first use to `--model-dir` (default: audio-separator's own folder; `AUDIO_SEPARATOR_MODEL_DIR` wins over both).
+
+The command prints each step's time and peak VRAM, then the null test (largest error and residual RMS of the stems against the mix). `uv run studio process --help` lists the options.
+
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

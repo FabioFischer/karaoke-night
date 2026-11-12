@@ -356,8 +356,8 @@ def _sections(windows, scores, path, duration):
             for s in sections]
 
 
-def detect_keys(chroma, chroma_times, notes, duration, window_s=8.0, hop_s=2.0, melody_weight=0.5,
-                switch_penalty=1.0) -> dict:
+def detect_keys(chroma, chroma_times, notes, duration, window_s=16.0, hop_s=2.0, melody_weight=0.5,
+                switch_penalty=6.0) -> dict:
     """Key sections from instrumental chroma (12, frames) and melody notes.
 
     Each window sums the chroma frames and the melody's pitch classes weighted
@@ -512,7 +512,7 @@ def _print_sections(label, sections):
         print(f"    {_clock(s['start'])} - {_clock(s['end'])}  {s['key']:<9} ({s['score']:.2f})")
 
 
-def run_key(pkg: Path, name: str, window_s=8.0, hop_s=2.0, melody_weight=0.5, switch_penalty=1.0,
+def run_key(pkg: Path, name: str, window_s=16.0, hop_s=2.0, melody_weight=0.5, switch_penalty=6.0,
             chroma=None) -> dict:
     manifest = load_manifest(pkg)
     out = out_dir(pkg)
@@ -561,8 +561,8 @@ def agreement(curves: dict) -> dict:
     return result
 
 
-def run_all(pkg: Path, trackers, stem="lead", model_dir=DEFAULT_MODEL_DIR, window_s=8.0, hop_s=2.0,
-            melody_weight=0.5, switch_penalty=1.0) -> dict:
+def run_all(pkg: Path, trackers, stem="lead", model_dir=DEFAULT_MODEL_DIR, window_s=16.0, hop_s=2.0,
+            melody_weight=0.5, switch_penalty=6.0) -> dict:
     manifest = load_manifest(pkg)
     start = time.perf_counter()
     instrumental = read_instrumental(pkg, manifest)
@@ -616,12 +616,12 @@ def run_check() -> None:
 # CLI ----------------------------------------------------------------------
 
 def _key_args(parser):
-    parser.add_argument("--window", type=float, default=8.0, help="key window in seconds (default 8)")
+    parser.add_argument("--window", type=float, default=16.0, help="key window in seconds (default 16)")
     parser.add_argument("--hop", type=float, default=2.0, help="key window hop in seconds (default 2)")
     parser.add_argument("--melody-weight", type=float, default=0.5,
                         help="share of the melody histogram against the chroma, 0 to 1 (default 0.5)")
-    parser.add_argument("--switch-penalty", type=float, default=1.0,
-                        help="score a key change costs in the smoothing (default 1.0)")
+    parser.add_argument("--switch-penalty", type=float, default=6.0,
+                        help="score a key change costs in the smoothing (default 6.0)")
 
 
 def main(argv=None) -> None:

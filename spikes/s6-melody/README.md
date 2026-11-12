@@ -65,9 +65,9 @@ Output: `notes-<T>.json` (`onset`, `offset` in s, `midi`, `cents`, `confidence` 
 ### 3. Key (`key`)
 
 1. **Chroma of the instrumental:** `drums + bass + guitar + piano + other`, mono, at 22.05 kHz, `librosa.feature.chroma_cqt` with a hop of 2048 samples (93 ms).
-2. **Sliding windows** of `--window` seconds every `--hop` seconds (defaults 8 and 2). Per window: the chroma frames summed, and a pitch class histogram of the notes weighted by how long each note lasts inside the window. Each is normalized to sum 1 and they are mixed as `melody_weight * melody + (1 - melody_weight) * chroma` (`--melody-weight`, default 0.5). A window without notes uses the chroma alone.
+2. **Sliding windows** of `--window` seconds every `--hop` seconds (defaults 16 and 2). Per window: the chroma frames summed, and a pitch class histogram of the notes weighted by how long each note lasts inside the window. Each is normalized to sum 1 and they are mixed as `melody_weight * melody + (1 - melody_weight) * chroma` (`--melody-weight`, default 0.5). A window without notes uses the chroma alone.
 3. **Correlation** of each window with the 24 Krumhansl-Kessler profiles (12 major, 12 minor).
-4. **Smoothing:** a Viterbi path over the windows that maximizes the summed correlation minus `--switch-penalty` (default 1.0) per key change, so a single odd window does not flip the key.
+4. **Smoothing:** a Viterbi path over the windows that maximizes the summed correlation minus `--switch-penalty` (default 6.0) per key change, so a single odd window does not flip the key. The defaults come from the S6 run on real songs: with 8 s and 1.0, songs that never change key came out with up to 14 sections, mostly neighbor keys; 16 s and 6.0 left them with 1 to 3 sections and still found the real modulation, 2 s later.
 5. **Sections:** consecutive windows with the same key; a boundary sits halfway between the centers of the last window of one key and the first of the next. `score` is the mean correlation of the key over its windows (1.0 is a perfect match).
 
 `keys-<T>.json` holds the combined answer and also `melody_only` (melody weight 1) and `chroma_only` (melody weight 0), and the command prints all three, so the run shows which source finds the key. The boundary of a key change is only as precise as the windows: expect it within about one window of the real change.

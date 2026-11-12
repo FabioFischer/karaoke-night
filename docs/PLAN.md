@@ -6,11 +6,10 @@
 
 *Last updated: 2026-11-11*
 
-- **Phase:** 0 (proofs of concept), in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time). Results in §6.
+- **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) is next.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6.
 - **Next:**
-  - spike S6 (melody and key), on the songs separated in S2;
-  - milestone A1 once Phase 0 is done;
+  - milestone A1 (repository skeleton);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -43,6 +42,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Storage | SQLite on the Stage (local library and history), plus files on disk. | No infrastructure to run. |
 | Microphones | The REAPER template ships with 2 mic tracks from day one. | The beta needs two singers, and this avoids rebuilding the template. |
 | Vocal effects | The effects chain is free and controlled by hand in REAPER on the Stage (for example pitch correction, reverb, delay, compression, doubling). The app never picks plugins. In the beta it only provides data that the chain may use (§6, Phase 2). | Effects need room to evolve, and REAPER is the right place to tune them. |
+| Melody and key | RMVPE (`rmvpe-onnx`, on the CPU) on the lead stem, grouped into notes; key per section from the notes plus the instrumental's chroma, with Krumhansl-Kessler profiles over 16 s windows and a Viterbi smoothing. Chosen in S6. | Got the octave right where the other trackers jumped up on a strong held note, fewest chromatic artifacts, and about 0.5 s per minute of song. |
 | Pitch correction | Alpha: chromatic mode (snap to the nearest semitone), which needs no song data. Beta: per-section key or target notes, from the melody analysis. | A fixed key sounds wrong in songs that change key. |
 | Key change | Chosen at setup only. The key stays fixed while the song plays. | Simpler, and enough for singing. |
 | Library sync | The Studio is the source of truth. The Stage mirrors the whole Studio library: it downloads what is missing and removes what the Studio no longer lists. Deleting a song means deleting it on the Studio. | Simple, and a song deleted by hand doesn't come back on the next sync. Disk use gets revisited if it becomes a problem. |
@@ -276,6 +276,25 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - **What it means for a new song during the night:** about 2 min of separation (S2) plus 1 to 1.5 min of transfer over a mobile link like this one. The library is preloaded at home, so only songs asked for that night take this path. Opus just for transfer (§8) stays the fallback if the venue's network turns out slower.
 - Each file is a new TCP connection here (8 per package). The Stage downloader in A5 can reuse one connection, which can only help.
 
+**S6, round 1 (2026-11-12): pass, RMVPE chosen.** Script and runbook in [`spikes/s6-melody/`](../spikes/s6-melody/README.md). Six songs separated with combination B: the five from S2 plus a rock song with a well-known modulation before its last chorus. Three trackers on the lead stem, the backing of the two-part harmony song as an extra. torchcrepe 0.0.24 on the GPU, pYIN (librosa 1.0.0) and RMVPE (`rmvpe-onnx` 0.2.3) on the CPU, all on a common 10 ms grid. Notes and keys were judged by ear on the Stage, from a synth preview over the instrumental and from the note MIDI files in REAPER next to the stems.
+
+| Tracker | Where | Time per minute of song | Notes per song |
+|---|---|---|---|
+| pYIN | CPU | 0.9 to 1.2 s | 276 to 497 |
+| torchcrepe (`full`) | GPU, 6.3 GB reserved | 1.9 to 2.0 s | 262 to 493 |
+| **RMVPE** | **CPU** | **0.4 to 0.6 s** | **284 to 505** |
+
+- **Timing and key change:** note timing is consistent with the singing, and the modulation is found where it happens (at 3:23, confirmed by ear). The instrumental's chroma adds about 5 s per song. Everything together is under a tenth of the separation time.
+- **Octave errors on strong held notes:** at the start of one chorus, a long, loud note sung with some drive, pYIN and torchcrepe both read an octave too high with high confidence (0.71 and 0.80), so no confidence rule would have caught it. RMVPE got the octave right and kept it as one 1.6 s note. Isolated octave jumps (one note up an octave and back) were rare for all three, 0 to 2 per song.
+- **Chromatic artifacts:** runs of three or more notes moving by semitones, mostly at phrase endings where the voice gets quieter. Fewest with RMVPE on the modulating song (6, against 17 for pYIN and 13 for torchcrepe). After the vibrato fix below they no longer stood out by ear, so the confidence-based "hold the previous note" rule that was considered is not needed now; it stays an idea for the beta if scoring shows the need.
+- **Agreement between trackers:** on frames all three call voiced, 83 to 94% are within 50 cents of each other, with a median difference of 5 to 15 cents. Folding octaves changes little, since octave errors are rare.
+- **Vibrato was the first big problem, and it was in the note grouping, not the trackers:** a note with ±50 cents of vibrato or more turned into a burst of short notes, alternating semitones at ±80 cents. Splitting against a pitch smoothed over 190 ms (about one vibrato period) keeps vibrato up to ±100 cents in one note, and a held step still splits at the step. Slow slides of 250 ms or more between two notes still leave notes in between.
+- **Notes where nobody sings:** a few short notes come from residue in the lead stem. Harmless for pitch correction, since there is no voice to correct there. Scoring has to ignore them (§8).
+- **Key per section needs strong smoothing:** with 8 s windows and a low switch cost, songs that never change key came out with up to 14 sections, mostly neighbor keys sharing most notes (a minor key and its relative major, or a fifth away). 16 s windows and a switch cost of 6 left those songs with 1 to 3 sections and still found the real modulation, 2 s later than with 8 s. The section between the verse key and its relative major merged into one, which changes nothing for pitch correction since both keys have the same notes. Whether the remaining sections in a disco song are real wasn't checked.
+- **torchcrepe adds random dither** of up to ±20 cents per frame (`bins_to_cents`); the spike fixes the seed and applies torchcrepe's mean filter so runs repeat.
+- **Backing with a single harmony line:** torchcrepe and RMVPE agreed on 88% of frames within 50 cents on the two-part harmony song. Not judged by ear yet; that belongs with beta item 2.
+- **For the beta (Phase 2, items 2 and 3):** RMVPE runs on the CPU in about 2 s per song, so it adds nothing noticeable to a job and could even run on the Stage. The model is about 360 MB, downloaded once.
+
 ### Phase 1: alpha
 
 The alpha is a test run, not a finished event. The TV mirrors the Stage screen (over HDMI or screen casting) and is driven with the Stage's keyboard and mouse. There is no queue.
@@ -299,7 +318,7 @@ Proposed order:
 1. **Two microphones:** each mic gets a role (lead or backing), and the role decides which original vocal stems are muted.
 2. **Lyrics and melody analysis** on the Studio. Together they become `pipeline_version` 2, and the library is reprocessed.
    - Lyrics split into lead and backing, with WhisperX alignment.
-   - Melody: pitch tracking on the lead stem gives the expected notes and the key per section. Backing gets the same only when it holds a single harmony line; several voices at once aren't reliable. The tracker comes from S6.
+   - Melody: pitch tracking on the lead stem gives the expected notes and the key per section. Backing gets the same only when it holds a single harmony line; several voices at once aren't reliable. The tracker is RMVPE, from S6.
 3. **Pitch correction guided by the song:** when it loads a song, the Lua listener writes a guide MIDI track with the expected notes and a key automation, both already transposed. Whether the pitch correction plugin uses them stays a choice made in REAPER. Target notes must allow singing an octave up or down.
 4. **Pre-performance:** before singing, the app plays a short excerpt with its lyrics on screen, so the singer can adjust stem volumes, the key and the lyrics offset. The offset is saved per song on the Stage.
 5. **Phone companion page** (local network, joined with a QR code): live lyrics and adding songs to the queue.
@@ -333,7 +352,7 @@ Proposed order:
 | YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. |
 | Poor lead vs backing separation (duets) | The "no vocals" preset always works. Pick models in S2 and reprocess when better ones appear. |
 | Song missing from LRCLIB, or out of sync | Unsynced lyrics as a fallback. In the beta, offset adjustment in the pre-performance and automatic alignment. |
-| Melody tracking misled by backing residue in the lead stem, melisma, or rap and spoken parts | Ignore sections with low confidence or no pitch, and don't score them. Pick the tracker in S6. |
+| Melody tracking misled by backing residue in the lead stem, melisma, or rap and spoken parts | Ignore sections with low confidence or no pitch, and don't score them. RMVPE (S6) got the octave right on a strong held note where the others jumped up. Ignore notes where the singer is silent. |
 | Mics pick up the original backing vocals from the speakers, which skews scoring | Dynamic mics and speakers in front of the singers. Measure it when scoring is built. |
 | Feedback with a PA | Dynamic mics, speakers in front of the singers, low cut and a gate in the effects chain. |
 | Slow upload from the Studio, or a slow downlink at the venue | FLAC by default. S5 measured 53 to 57 Mbit/s of upload from the Studio, and a phone hotspot as the bottleneck (12.6 Mbit/s median). If the venue's network is that slow, high-bitrate Opus just for transfer. |
@@ -341,6 +360,6 @@ Proposed order:
 ## 9. Open decisions
 
 - [x] Separation models (from S2: combination B, see §3)
-- [ ] Pitch tracker and key detection method (from S6)
+- [x] Pitch tracker and key detection method (from S6: RMVPE, see §3)
 - [ ] Loudness target between songs (LUFS)
 - [ ] Hardware recommendations confirmed (from S1 and sound tests)

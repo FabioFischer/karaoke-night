@@ -2,11 +2,11 @@
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 
@@ -25,6 +25,16 @@ PackagePath = Annotated[str, AfterValidator(_check_package_path)]
 """A file path relative to the package directory that cannot leave it."""
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
+
+def _to_utc_seconds(value: datetime) -> datetime:
+    return value.astimezone(UTC).replace(microsecond=0)
+
+
+UtcSeconds = Annotated[AwareDatetime, AfterValidator(_to_utc_seconds)]
+"""Stored in UTC with whole seconds, so it always writes as `YYYY-MM-DDTHH:MM:SSZ`."""
 
 
 class _Model(BaseModel):
@@ -59,19 +69,21 @@ class Models(_Model):
 
 
 class Manifest(_Model):
+    model_config = ConfigDict(validate_by_name=True)
+
     # `schema` is a deprecated BaseModel method, so the field takes another name.
     schema_version: Literal[1] = Field(alias="schema")
     pipeline_version: int
     id: str
     title: str
     artist: str
-    duration_s: float
+    duration_s: FiniteFloat
     source: Source
-    gain_db: float
+    gain_db: FiniteFloat
     stems: dict[str, Stem]
     lyrics: Lyrics | None = None
     models: Models
-    created_at: datetime
+    created_at: UtcSeconds
 
     @classmethod
     def load(cls, path: Path) -> Self:

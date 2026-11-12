@@ -99,14 +99,18 @@ def write_package(folder: Path, seconds, notes, chords, gain_db=1.5, seed=0):
     return folder
 
 
-def f0_curve(segments, seconds):
+def f0_curve(segments, seconds, vibrato_hz=5.5):
     """A 10 ms f0 curve (Hz, NaN unvoiced) from (onset_s, duration_s, midi, vibrato_cents) segments."""
     times = np.arange(int(round(seconds / HOP))) * HOP
     midi = np.full(len(times), np.nan)
     for onset, duration, pitch, vibrato in segments:
         mask = (times >= onset - 1e-9) & (times < onset + duration - 1e-9)
-        midi[mask] = pitch + vibrato / 100 * np.sin(2 * np.pi * 5.5 * (times[mask] - onset))
+        midi[mask] = pitch + vibrato / 100 * np.sin(2 * np.pi * vibrato_hz * (times[mask] - onset))
     return times, melody.midi_to_hz(midi)
+
+
+def notes_of(times, f0):
+    return melody.segment_notes(times, f0, np.where(np.isnan(f0), 0.0, 0.9))
 
 
 class ConversionTests(unittest.TestCase):
@@ -141,10 +145,39 @@ class SegmentationTests(unittest.TestCase):
         notes = melody.segment_notes(times, f0, confidence)
         self.assertEqual([n["midi"] for n in notes], [60, 62, 64, 59])
         for note, (onset, duration, _, _) in zip(notes, [s for s in segments if s[1] > 0.1]):
-            self.assertAlmostEqual(note["onset"], onset, delta=0.04)
-            self.assertAlmostEqual(note["offset"], onset + duration, delta=0.04)
+            self.assertAlmostEqual(note["onset"], onset, delta=HOP / 2)
+            self.assertAlmostEqual(note["offset"], onset + duration, delta=HOP / 2)
         self.assertAlmostEqual(notes[2]["cents"], 20, delta=3)
         self.assertAlmostEqual(notes[0]["confidence"], 0.9, places=6)
+
+    def test_wide_vibrato_stays_one_note(self):
+        for cents in (60, 80):
+            for rate in (5.0, 5.5, 6.0):
+                with self.subTest(cents=cents, rate=rate):
+                    times, f0 = f0_curve([(0.2, 1.5, 60, cents)], 2.0, vibrato_hz=rate)
+                    notes = notes_of(times, f0)
+                    self.assertEqual([n["midi"] for n in notes], [60])
+                    self.assertAlmostEqual(notes[0]["onset"], 0.2, delta=HOP / 2)
+                    self.assertAlmostEqual(notes[0]["offset"], 1.7, delta=HOP / 2)
+
+    def test_a_held_step_with_vibrato_splits_at_the_step(self):
+        for cents in (0, 60):
+            with self.subTest(cents=cents):
+                times, f0 = f0_curve([(0.2, 0.6, 60, cents), (0.8, 0.6, 62, cents)], 1.6)
+                notes = notes_of(times, f0)
+                self.assertEqual([n["midi"] for n in notes], [60, 62])
+                self.assertAlmostEqual(notes[0]["offset"], 0.8, delta=HOP / 2)
+                self.assertAlmostEqual(notes[1]["onset"], 0.8, delta=HOP / 2)
+
+    def test_a_quick_slide_between_two_held_notes_gives_the_two_notes(self):
+        # 4 semitones in 200 ms. Slower slides keep notes on the pitches passed (see the README).
+        times = np.arange(160) * HOP
+        midi = np.where(times >= 0.2 - 1e-9, 60.0, np.nan)
+        glide = (times >= 0.7 - 1e-9) & (times < 0.9 - 1e-9)
+        midi[glide] = 60 + 4 * (times[glide] - 0.7 + HOP) / 0.2
+        midi[times >= 0.9 - 1e-9] = 64.0
+        notes = notes_of(times, melody.midi_to_hz(midi))
+        self.assertEqual([n["midi"] for n in notes], [60, 64])
 
     def test_low_confidence_frames_are_dropped(self):
         times, f0 = f0_curve([(0.0, 1.0, 60, 0)], 1.0)
@@ -174,7 +207,13 @@ class TrackerTests(unittest.TestCase):
         notes = melody.segment_notes(track["times"], track["f0"], track["confidence"])
         self.assertEqual([n["midi"] for n in notes], [57, 60, 64])
         for note, (onset, duration, _) in zip(notes, sung):
-            self.assertAlmostEqual(note["onset"], onset, delta=0.06)
+            self.assertAlmostEqual(note["onset"], onset, delta=0.03)
+
+    def test_pyin_bins_fall_on_the_semitones(self):
+        audio = sung_tone([(0.1, 0.6, 57)], 0.8, vibrato_cents=0.0)
+        f0 = melody.run_tracker("pyin", audio, RATE)["f0"]
+        cents = 100 * (melody.hz_to_midi(f0[np.isfinite(f0)]) - 57)
+        self.assertAlmostEqual(float(np.median(cents)), 0.0, places=6)
 
     def test_heavy_trackers_are_not_imported_at_module_import(self):
         for name in ("torch", "torchcrepe", "onnxruntime", "rmvpe_onnx"):
@@ -229,9 +268,9 @@ class KeyTests(unittest.TestCase):
                     notes.append({"onset": float(t), "offset": float(t + 0.4), "midi": 60 + pc})
         return times, chroma, notes
 
-    def assert_c_then_d(self, sections, window):
+    def assert_c_then_d(self, sections, hop):
         self.assertEqual([s["key"] for s in sections], ["C major", "D major"])
-        self.assertLessEqual(abs(sections[1]["start"] - 40), window)
+        self.assertLessEqual(abs(sections[1]["start"] - 40), hop)
         self.assertEqual(sections[0]["start"], 0.0)
         self.assertEqual(sections[-1]["end"], 80.0)
         self.assertEqual(sections[0]["end"], sections[1]["start"])
@@ -242,7 +281,7 @@ class KeyTests(unittest.TestCase):
         result = melody.detect_keys(chroma, times, notes, 80.0, window_s=window, hop_s=hop)
         for answer in ("combined", "melody_only", "chroma_only"):
             with self.subTest(answer=answer):
-                self.assert_c_then_d(result[answer], window)
+                self.assert_c_then_d(result[answer], hop)
                 for section in result[answer]:
                     self.assertGreater(section["score"], 0.5)
 
@@ -258,6 +297,14 @@ class KeyTests(unittest.TestCase):
         for key in (0, 5, 12 + 9, 12 + 4):
             vector = np.roll(melody.PROFILES[key // 12], key % 12)
             self.assertEqual(int(np.argmax(melody.key_scores(vector[None, :])[0])), key)
+
+
+class ClockTests(unittest.TestCase):
+    def test_rounding_carries_into_the_minute(self):
+        self.assertEqual(melody._clock(239.96), "4:00.0")
+        self.assertEqual(melody._clock(59.94), "0:59.9")
+        self.assertEqual(melody._clock(61.0), "1:01.0")
+        self.assertEqual(melody._clock(0.0), "0:00.0")
 
 
 class AgreementTests(unittest.TestCase):
@@ -279,11 +326,26 @@ class AgreementTests(unittest.TestCase):
         self.assertAlmostEqual(result["a-c"]["within_50"], 1.0)
         self.assertEqual(set(result), {"a-b", "a-c", "b-c"})
 
+    def test_octave_folded_agreement_ignores_octave_errors(self):
+        a = np.full(100, 220.0)
+        b = np.full(100, 220.0)
+        b[:60] *= 2.0  # one octave up
+        b[60:] *= 2 ** (-1210 / 1200)  # one octave and 10 cents down
+        ab = melody.agreement({"a": a, "b": b})["a-b"]
+        self.assertAlmostEqual(ab["median_abs_cents"], 1200.0, places=6)
+        self.assertEqual(ab["within_50"], 0.0)
+        self.assertAlmostEqual(ab["median_abs_cents_folded"], 0.0, places=6)
+        self.assertEqual(ab["within_50_folded"], 1.0)
+        # 700 cents folds to 500, not 700.
+        c = np.full(100, 220.0 * 2 ** (700 / 1200))
+        self.assertAlmostEqual(melody.agreement({"a": a, "c": c})["a-c"]["median_abs_cents_folded"], 500.0)
+
     def test_no_shared_voiced_frames(self):
         a = np.array([440.0, np.nan])
         b = np.array([np.nan, 440.0])
         self.assertEqual(melody.agreement({"a": a, "b": b})["a-b"],
-                         {"frames": 0, "median_abs_cents": None, "within_50": None})
+                         {"frames": 0, "median_abs_cents": None, "within_50": None,
+                          "median_abs_cents_folded": None, "within_50_folded": None})
 
 
 class PreviewTests(unittest.TestCase):
@@ -295,6 +357,22 @@ class PreviewTests(unittest.TestCase):
             preview = melody.render_preview(loud, notes, gain_db=3.0, lead=lead)
             self.assertEqual(preview.shape, (n, 2))
             self.assertLessEqual(np.max(np.abs(preview)), melody.PREVIEW_CEILING)
+
+    def test_levels_of_instrumental_lead_and_synth(self):
+        t = np.arange(RATE) / RATE
+        instrumental = 0.1 * np.stack([np.sin(2 * np.pi * 220 * t)] * 2, axis=1)
+        lead = 0.1 * np.stack([np.sin(2 * np.pi * 330 * t)] * 2, axis=1)
+        gain = 10 ** (-6 / 20)
+        alone = melody.render_preview(instrumental, [], gain_db=-6.0)
+        np.testing.assert_allclose(alone, instrumental * gain)
+        with_lead = melody.render_preview(instrumental, [], gain_db=-6.0, lead=lead, lead_db=-12.0)
+        np.testing.assert_allclose(with_lead - alone, lead * gain * 10 ** (-12 / 20), atol=1e-12)
+        notes = [{"onset": 0.2, "offset": 0.8, "midi": 69}]
+        with_synth = melody.render_preview(instrumental, notes, gain_db=-6.0, synth_db=-3.0)
+        tone = (with_synth - alone)[:, 0]
+        active = tone != 0
+        mix_rms = np.sqrt(np.mean((instrumental * gain) ** 2))
+        self.assertAlmostEqual(np.sqrt(np.mean(tone[active] ** 2)), mix_rms * 10 ** (-3 / 20), places=9)
 
     def test_synth_plays_the_notes(self):
         notes = [{"onset": 0.5, "offset": 1.0, "midi": 69}]
@@ -315,6 +393,20 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(info.samplerate, 44_100)
         self.assertEqual(info.frames, 2 * RATE)
         self.assertEqual(info.channels, 2)
+
+    def test_preview_file_applies_the_package_gain(self):
+        gain = 10 ** (-6 / 20)
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = write_package(Path(tmp) / "pkg", 1.0, [(0.2, 0.5, 60)], progression(0, 0, 1.0), gain_db=-6.0)
+            manifest = melody.load_manifest(pkg)
+            expected = melody.read_instrumental(pkg, manifest) * gain
+            lead = melody.read_stem(pkg, manifest, "lead") * gain * 10 ** (-12 / 20)
+            alone, _ = sf.read(str(melody.write_preview(pkg, [], pkg / "s6" / "a.wav")), always_2d=True)
+            with_lead, _ = sf.read(str(melody.write_preview(pkg, [], pkg / "s6" / "b.wav", with_lead=True)),
+                                   always_2d=True)
+        self.assertLess(np.max(np.abs(expected + lead)), melody.PREVIEW_CEILING)
+        np.testing.assert_allclose(alone, expected, atol=2 / 2**15)
+        np.testing.assert_allclose(with_lead, expected + lead, atol=2 / 2**15)
 
 
 class EndToEndTests(unittest.TestCase):

@@ -28,6 +28,7 @@ Usage:
       [--melody-weight W] [--switch-penalty P]
   uv run spikes/s6-melody/melody.py preview <pkg> --tracker T [--stem lead] [--with-lead]
   uv run spikes/s6-melody/melody.py all <pkg> [--trackers pyin,crepe,rmvpe] [--stem lead] [...]
+  uv run spikes/s6-melody/melody.py check
 
 <pkg> is a package folder from S2 (manifest.json plus stems/*.flac). Every
 output goes to <pkg>/s6/. torch, torchcrepe and rmvpe_onnx are imported only
@@ -55,12 +56,15 @@ TRACKERS = ("pyin", "crepe", "rmvpe")
 TRACKER_RATE = 16_000
 TRACKER_HOP = 160
 GRID_HOP = 0.01
-# Sung range searched by pYIN and CREPE: C2 to C6.
-FMIN = 65.0
-FMAX = 1_047.0
-# Voicing: pYIN uses its own voiced flag. CREPE periodicity below 0.21 is
-# silence (the torchcrepe README). RMVPE salience below 0.03 is unvoiced (the
-# RVC default).
+# Sung range searched by pYIN and CREPE: C2 to C6. pYIN's pitch bins start at
+# fmin, so fmin on C2 puts them on the semitones.
+FMIN = float(librosa.note_to_hz("C2"))
+FMAX = float(librosa.note_to_hz("C6"))
+# Voicing: pYIN uses its own voiced flag. For CREPE, 0.21 is the periodicity
+# threshold the torchcrepe README uses to remove unpitched regions of clean
+# speech, there after a median filter on periodicity (its suggestion for
+# silence is threshold.Silence(-60)); here it is applied to the raw
+# periodicity. RMVPE salience below 0.03 is unvoiced (the RVC default).
 CREPE_THRESHOLD = 0.21
 RMVPE_THRESHOLD = 0.03
 CREPE_BATCH = 2_048
@@ -136,10 +140,16 @@ def _crepe(audio16k, model_dir):
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
     start = time.perf_counter()
+    # torchcrepe dithers every pitch by up to one 20 cent bin, drawn from
+    # numpy's global random state (torchcrepe.convert.dither). The seed makes
+    # runs repeat; the 3 frame mean, as in the torchcrepe README, averages the
+    # dither down.
+    np.random.seed(0)
     pitch, periodicity = torchcrepe.predict(
         torch.from_numpy(audio16k.astype(np.float32))[None], TRACKER_RATE, hop_length=TRACKER_HOP,
         fmin=FMIN, fmax=FMAX, model="full", decoder=torchcrepe.decode.viterbi,
         return_periodicity=True, batch_size=CREPE_BATCH, device=device)
+    pitch = torchcrepe.filter.mean(pitch, 3)
     seconds = time.perf_counter() - start
     pitch, periodicity = pitch[0].numpy().astype(float), periodicity[0].numpy().astype(float)
     vram = round(torch.cuda.max_memory_reserved() / 2**20, 1) if device != "cpu" else None
@@ -195,16 +205,18 @@ def _nan_median_filter(values, size):
     return np.where(np.isnan(values), np.nan, smoothed)
 
 
-def segment_notes(times, f0, confidence, min_confidence=0.0, smooth_frames=5, split_semitones=0.7,
+def segment_notes(times, f0, confidence, min_confidence=0.0, smooth_frames=19, split_semitones=0.7,
                   split_frames=3, max_gap_s=0.03, min_note_s=0.08) -> list[dict]:
     """Group an f0 curve into notes.
 
     Frames that are unvoiced or under min_confidence are dropped, the pitch is
     median smoothed over smooth_frames, and a note ends at a gap longer than
-    max_gap_s or when the pitch stays more than split_semitones away from the
-    note's median for split_frames frames (vibrato stays inside one note).
-    Notes shorter than min_note_s are dropped. midi is the rounded median in
-    semitones and cents the deviation from it.
+    max_gap_s or when the smoothed pitch stays more than split_semitones away
+    from the note's smoothed median for split_frames frames. The default
+    window of 190 ms spans about one vibrato period (5 to 6 Hz), so vibrato
+    does not reach the split decision, while the median still keeps a held
+    step sharp. Notes shorter than min_note_s are dropped. midi is the rounded
+    median of the unsmoothed pitch and cents the deviation from it.
     """
     times, confidence = np.asarray(times, dtype=float), np.asarray(confidence, dtype=float)
     hop = float(times[1] - times[0]) if len(times) > 1 else GRID_HOP
@@ -490,7 +502,8 @@ def run_notes(pkg: Path, name: str) -> list[dict]:
 
 
 def _clock(seconds: float) -> str:
-    return f"{int(seconds // 60)}:{seconds % 60:04.1f}"
+    minutes, tenths = divmod(round(seconds * 10), 600)
+    return f"{minutes}:{tenths / 10:04.1f}"
 
 
 def _print_sections(label, sections):
@@ -528,19 +541,23 @@ def run_preview(pkg: Path, name: str, with_lead=False, stem="lead", synth_db=0.0
 
 
 def agreement(curves: dict) -> dict:
-    """Pairwise cents difference on the frames every compared tracker calls voiced."""
+    """Pairwise cents difference on the frames every compared tracker calls voiced.
+
+    The _folded values take the difference modulo an octave (folded to at most
+    600 cents), since scoring ignores the octave.
+    """
     n = min(len(f0) for f0 in curves.values())
     curves = {name: np.asarray(f0, dtype=float)[:n] for name, f0 in curves.items()}
     voiced = np.all([np.isfinite(f0) & (f0 > 0) for f0 in curves.values()], axis=0)
     result = {}
     for a, b in itertools.combinations(curves, 2):
-        cents = np.abs(1200 * np.log2(curves[a][voiced] / curves[b][voiced]))
+        signed = 1200 * np.log2(curves[a][voiced] / curves[b][voiced])
         frames = int(voiced.sum())
-        result[f"{a}-{b}"] = {
-            "frames": frames,
-            "median_abs_cents": round(float(np.median(cents)), 1) if frames else None,
-            "within_50": round(float(np.mean(cents <= 50)), 4) if frames else None,
-        }
+        row = {"frames": frames}
+        for suffix, cents in (("", np.abs(signed)), ("_folded", np.abs((signed + 600) % 1200 - 600))):
+            row[f"median_abs_cents{suffix}"] = round(float(np.median(cents)), 1) if frames else None
+            row[f"within_50{suffix}"] = round(float(np.mean(cents <= 50)), 4) if frames else None
+        result[f"{a}-{b}"] = row
     return result
 
 
@@ -575,9 +592,25 @@ def run_all(pkg: Path, trackers, stem="lead", model_dir=DEFAULT_MODEL_DIR, windo
     print(f"chroma: {chroma_s} s")
     for pair, row in summary["agreement"].items():
         print(f"agreement {pair}: {row['frames']} frames, median {row['median_abs_cents']} cents, "
-              f"within 50 cents {row['within_50']}")
+              f"within 50 cents {row['within_50']}; octave folded: median {row['median_abs_cents_folded']} "
+              f"cents, within 50 cents {row['within_50_folded']}")
     print(f"summary -> {out_dir(pkg) / 'summary.json'}")
     return summary
+
+
+def run_check() -> None:
+    """Import every tracker's library, so a broken environment shows before a long run."""
+    from importlib.metadata import version
+
+    import onnxruntime
+    import rmvpe_onnx  # noqa: F401
+    import torch
+    import torchcrepe  # noqa: F401
+
+    cuda = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "not available"
+    print(f"librosa {librosa.__version__}, torch {torch.__version__} (CUDA: {cuda}), "
+          f"torchcrepe {version('torchcrepe')}, rmvpe-onnx {version('rmvpe-onnx')}, "
+          f"onnxruntime {onnxruntime.__version__} ({', '.join(onnxruntime.get_available_providers())})")
 
 
 # CLI ----------------------------------------------------------------------
@@ -616,9 +649,12 @@ def main(argv=None) -> None:
     p.add_argument("--trackers", default="pyin,crepe,rmvpe", help="comma separated (default pyin,crepe,rmvpe)")
     p.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     _key_args(p)
+    sub.add_parser("check", help="import torch, torchcrepe and rmvpe_onnx and print their versions")
 
     args = parser.parse_args(argv)
-    if args.command == "track":
+    if args.command == "check":
+        run_check()
+    elif args.command == "track":
         run_track(args.pkg, args.tracker, args.stem, args.model_dir)
     elif args.command == "notes":
         run_notes(args.pkg, tag(args.tracker, args.stem))

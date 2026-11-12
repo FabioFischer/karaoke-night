@@ -215,7 +215,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 | S5 | Transfer | Stage on a remote network | Download a ~150 MB package from the Studio over Tailscale, simulating a remote network with a phone hotspot. | Under ~1 min per package. |
 | S6 | Melody and key | Studio | On 5 songs separated in S2, including one that changes key, run pitch tracking (f0) on the lead stem with 2–3 trackers (for example pYIN, torchcrepe, RMVPE). Group the curve into notes, and detect the key per section from the melody plus the instrumental's harmony (chroma). Play the notes back as a synth over the instrumental and compare by ear. Also try a backing stem that holds a single harmony line. | The notes follow the sung melody well enough to score against, key changes are found where they happen, and it adds little time next to separation. This spike picks the tracker for the beta. |
 
-**S1, round 1 (2026-11-10): pass.** Runbook and click generator in [`spikes/s1-latency/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f/spikes/s1-latency).
+**S1, round 1 (2026-11-10): pass.** Runbook and click generator in [`spikes/s1-latency/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s1-latency).
 
 - An entry-level 1-preamp interface with no native ASIO driver (ASIO4ALL over the Windows class driver) measured about 24 ms round trip at 128 samples and 22 ms at 64. WASAPI exclusive was worse (about 30 ms). Most of the delay is fixed by the driver path, so smaller buffers barely help. A re-measurement after the setup fixes below gave the same ~24 ms at 128 samples, with much cleaner sound.
 - Singing still felt comfortable, even with a free pitch correction plugin that adds about 1000 samples (about 23 ms). The plan keeps the effects in the live path. The official chain is defined later, preferring zero-latency pitch correction.
@@ -226,7 +226,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
   - the voice was monitored twice (REAPER's input monitoring plus another monitoring path), which sounds doubled and robotic.
 - These become setup rules for the template and the first-night checklist (A6, A9).
 
-**S3, round 1 (2026-11-11): pass.** Listener, driver and runbook in [`spikes/s3-reaper/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f/spikes/s3-reaper). Two generated test songs, 7 WAV stems of 240 s each, on the Stage machine of S1.
+**S3, round 1 (2026-11-11): pass.** Listener, driver and runbook in [`spikes/s3-reaper/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s3-reaper). Two generated test songs, 7 WAV stems of 240 s each, on the Stage machine of S1.
 
 - **Load:** 80 loads alternating two songs, with the mic monitored and someone singing into it: no audible dropout, and no failed load. Command to ack round trip: median 64 to 84 ms, max 101 ms (the first, cold load took 164 ms). The listener's own work: 12 to 19 ms. The 2 s target has a wide margin.
 - **Mute per stem, transpose +2 while playing:** both worked by ear, with no crackle. CPU peaked at 3% with 6 stems pitch shifted.
@@ -235,7 +235,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - Confirmed against the running REAPER: the request encoding (`;`, `/` and `\` inside the JSON survive) and the escaping of `GET/EXTSTATE` replies. Tracks without a stem name, like the mic track, kept their items.
 - For A6: new stem tracks inherited input monitoring on from the user's defaults (see the session template in §5.4), and stem tracks are found by name only, so a user track named like a stem would be overwritten. Both are template decisions for A6.
 
-**S4, round 1 (2026-11-11): pass.** Script and runbook in [`spikes/s4-search/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f/spikes/s4-search). 21 test songs typed by hand (typos kept), in more than one language, with duets, live recordings and songs that have many covers. ytmusicapi 1.12.3, yt-dlp 2026.10.26.
+**S4, round 1 (2026-11-11): pass.** Script and runbook in [`spikes/s4-search/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s4-search). 21 test songs typed by hand (typos kept), in more than one language, with duets, live recordings and songs that have many covers. ytmusicapi 1.12.3, yt-dlp 2026.10.26.
 
 - **Search:** the right version was in the ytmusicapi top 3 for 21 of 21 songs, and first for 20. The one miss at #1 was a different song by the same artist, with the right one at #2. Typos in titles and artist names didn't hurt. Two of the chosen versions are live recordings, and both ranked first. Covers, tributes, karaoke tracks and lullaby versions fill ranks 2 and 3, so the TV must show artist, album and duration to tell them apart.
 - **yt-dlp as the fallback:** its #1 is usually the official music video, often with a different length or mix from the studio audio. That confirms ytmusicapi as the main source. Search with flat extraction needs no JS runtime; downloading does (`yt-dlp[default]` with its challenge solver, plus Deno), which worked on the Studio.
@@ -243,7 +243,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - **For A7:** look up lyrics for the version the singer picks, not for the first result. `/api/get` can answer 200 with an empty record (no synced, plain or instrumental lyrics), so treat that like a miss and fall back to `/api/search`, keeping the best hit within the duration tolerance (2 s, the same as `/api/get`).
 - **Times:** median per query of 0.64 s (ytmusicapi), 0.82 s (yt-dlp) and 0.29 s (LRCLIB).
 
-**S2, round 1 (2026-11-11): pass.** Script and runbook in [`spikes/s2-separation/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f/spikes/s2-separation). Five test songs from S4 (a pop song with stacked lead vocals, a rock song with two-part harmonies, a live duet in constant harmony, a male and female duet, a disco song heavy on backing vocals), each through three combinations, all with `htdemucs_6s` for the instruments. audio-separator 0.48.0, torch 2.14.1 (CUDA 13.0) on the Studio.
+**S2, round 1 (2026-11-11): pass.** Script and runbook in [`spikes/s2-separation/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s2-separation). Five test songs from S4 (a pop song with stacked lead vocals, a rock song with two-part harmonies, a live duet in constant harmony, a male and female duet, a disco song heavy on backing vocals), each through three combinations, all with `htdemucs_6s` for the instruments. audio-separator 0.48.0, torch 2.14.1 (CUDA 13.0) on the Studio.
 
 | Combination | Vocals | Karaoke (lead) | Time, share of song length |
 |---|---|---|---|
@@ -261,7 +261,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 **S3, round 2 (2026-11-11): pass.** The S2 packages (FLAC) loaded with the S3 listener and driver unchanged. Command to ack round trip: 80 to 182 ms on a warm REAPER, 276 ms for the first load after REAPER started. The listener stopped answering once while tracks were being edited by hand; it worked again after REAPER was restarted. The cause wasn't found.
 
-**S5, round 1 (2026-11-11): pass on the Studio side, with a caveat.** Script and runbook in [`spikes/s5-transfer/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f/spikes/s5-transfer). The largest S2 package (135.7 MB, a 6:14 song) served by Python's static file server on the Studio and downloaded by the Stage over Tailscale, one file after the other, 3 runs per network. The sha256 of every stem matched the manifest on all 9 runs.
+**S5, round 1 (2026-11-11): pass on the Studio side, with a caveat.** Script and runbook in [`spikes/s5-transfer/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s5-transfer). The largest S2 package (135.7 MB, a 6:14 song) served by Python's static file server on the Studio and downloaded by the Stage over Tailscale, one file after the other, 3 runs per network. The sha256 of every stem matched the manifest on all 9 runs.
 
 | Network on the Stage | Tailscale path | Time per package (min / median / max) | Median throughput |
 |---|---|---|---|
@@ -275,7 +275,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 - **What it means for a new song during the night:** about 2 min of separation (S2) plus 1 to 1.5 min of transfer over a mobile link like this one. The library is preloaded at home, so only songs asked for that night take this path. Opus just for transfer (§8) stays the fallback if the venue's network turns out slower.
 - Each file is a new TCP connection here (8 per package). The Stage downloader in A5 can reuse one connection, which can only help.
 
-**S6, round 1 (2026-11-12): pass, RMVPE chosen.** Script and runbook in [`spikes/s6-melody/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f/spikes/s6-melody). Six songs separated with combination B: the five from S2 plus a rock song with a well-known modulation before its last chorus. Three trackers on the lead stem, the backing of the two-part harmony song as an extra. torchcrepe 0.0.24 on the GPU, pYIN (librosa 1.0.0) and RMVPE (`rmvpe-onnx` 0.2.3) on the CPU, all on a common 10 ms grid. Notes and keys were judged by ear on the Stage, from a synth preview over the instrumental and from the note MIDI files in REAPER next to the stems.
+**S6, round 1 (2026-11-12): pass, RMVPE chosen.** Script and runbook in [`spikes/s6-melody/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s6-melody). Six songs separated with combination B: the five from S2 plus a rock song with a well-known modulation before its last chorus. Three trackers on the lead stem, the backing of the two-part harmony song as an extra. torchcrepe 0.0.24 on the GPU, pYIN (librosa 1.0.0) and RMVPE (`rmvpe-onnx` 0.2.3) on the CPU, all on a common 10 ms grid. Notes and keys were judged by ear on the Stage, from a synth preview over the instrumental and from the note MIDI files in REAPER next to the stems.
 
 | Tracker | Where | Time per minute of song | Notes per song |
 |---|---|---|---|

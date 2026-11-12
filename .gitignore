@@ -24,6 +24,7 @@ __pycache__/
 .venv/
 .ruff_cache/
 .pytest_cache/
+dist/
 
 # Web dependencies and build output
 node_modules/

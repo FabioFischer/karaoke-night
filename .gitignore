@@ -19,3 +19,13 @@ library/
 
 # Python bytecode
 __pycache__/
+
+# Python environments and tool caches
+.venv/
+.ruff_cache/
+.pytest_cache/
+dist/
+
+# Web dependencies and build output
+node_modules/
+web/dist/

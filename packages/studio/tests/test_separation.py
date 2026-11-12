@@ -144,12 +144,6 @@ def test_separator_options_set_the_threshold_and_overlap(tmp_path: Path) -> None
     assert options["mdxc_params"]["segment_size"] == 256
 
 
-def test_separator_options_without_model_dir_keep_the_library_default(
-    tmp_path: Path,
-) -> None:
-    assert "model_file_dir" not in separator_options(None, tmp_path)
-
-
 def test_stem_from_filename_reads_the_stem_name() -> None:
     name = "vocals_input_(Vocals)_vocals_mel_band_roformer.wav"
 

@@ -171,25 +171,23 @@ def stem_from_filename(filename: str, base: str) -> str:
 
 
 def separator_options(
-    model_dir: Path | None, out_dir: Path, overlap: int | None = OVERLAP
+    model_dir: Path, out_dir: Path, overlap: int | None = OVERLAP
 ) -> dict:
     """Keyword arguments for audio-separator's Separator.
 
     normalization_threshold 1.0 (its default is 0.9) only rescales audio that
     peaks above full scale. overlap, when given, replaces the MDXC (RoFormer)
     overlap; without it the library takes the model YAML's num_overlap, else 8.
-    Without model_dir the library keeps its own default model folder.
     """
     options = {
         "log_level": logging.WARNING,
+        "model_file_dir": str(model_dir),
         "output_dir": str(out_dir),
         "output_format": "WAV",
         "use_soundfile": True,
         "normalization_threshold": NORMALIZATION_THRESHOLD,
         "sample_rate": SAMPLE_RATE,
     }
-    if model_dir is not None:
-        options["model_file_dir"] = str(model_dir)
     if overlap is not None:
         options["mdxc_params"] = {**MDXC_DEFAULTS, "overlap": overlap}
     return options
@@ -210,9 +208,7 @@ class AudioSeparatorRunner:
     float too, with no 16-bit rounding or clipping between steps.
     """
 
-    def __init__(
-        self, model_dir: Path | None, work_dir: Path, overlap: int | None = OVERLAP
-    ):
+    def __init__(self, model_dir: Path, work_dir: Path, overlap: int | None = OVERLAP):
         from audio_separator.separator import Separator
 
         self.Separator = Separator

@@ -38,6 +38,8 @@ from studio.separation import (
 EXTRA_MODULES = ("audio_separator", "torch", "yt_dlp")
 INSTALL_HINT = "uv sync --package studio --extra separation"
 DEFAULT_LIBRARY = Path("library")
+# The folder spike S2 used, instead of audio-separator's /tmp/audio-separator-models/.
+DEFAULT_MODEL_DIR = Path.home() / ".cache" / "audio-separator-models"
 
 
 def _paced_lrclib():
@@ -52,7 +54,7 @@ class Tools:
     fetch_info: Callable[[str], dict] = download.fetch_info
     download: Callable[[str, Path], Path] = download.download_audio
     convert: Callable[[Path, Path], None] = audio.convert
-    make_runner: Callable[[Path | None, Path], Runner] = AudioSeparatorRunner
+    make_runner: Callable[[Path, Path], Runner] = AudioSeparatorRunner
     lyrics_get: Callable = field(default_factory=_paced_lrclib)
 
 
@@ -103,8 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument(
         "--model-dir",
         type=Path,
+        default=DEFAULT_MODEL_DIR,
         help="where audio-separator downloads and caches models "
-        "(default: audio-separator's own; AUDIO_SEPARATOR_MODEL_DIR wins over both)",
+        "(default: ~/.cache/audio-separator-models); the AUDIO_SEPARATOR_MODEL_DIR "
+        "environment variable wins over it, and that folder must exist",
     )
     process.set_defaults(error=process.error)
     return parser

@@ -344,6 +344,15 @@ def test_model_dir_reaches_the_runner(tmp_path: Path, recorder: Recorder) -> Non
     assert ("make_runner", tmp_path / "models") in recorder.calls
 
 
+def test_model_dir_defaults_to_the_s2_cache_folder(
+    tmp_path: Path, recorder: Recorder
+) -> None:
+    run(recorder, VIDEO_ID, "--library", str(tmp_path / "lib"))
+
+    default = Path.home() / ".cache" / "audio-separator-models"
+    assert ("make_runner", default) in recorder.calls
+
+
 def test_help_lists_only_the_planned_options(capsys) -> None:
     with pytest.raises(SystemExit):
         cli.main(["process", "--help"])

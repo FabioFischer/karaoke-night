@@ -31,11 +31,11 @@ The layout is in `docs/PLAN.md` §5.5. Python commands run from the repository r
 
 ### Studio pipeline
 
-The separation stack (audio-separator, CUDA 13.0 PyTorch, yt-dlp) is an optional extra of the `studio` package, installed only on the Studio machine; `uv sync --all-packages` leaves it out. On the Studio:
+The separation stack (audio-separator, CUDA 13.0 PyTorch, yt-dlp) is an optional extra of the `studio` package, installed only on the Studio machine. On the Studio, set up with `uv sync --package studio --extra separation`, never `uv sync --all-packages`, which is an exact sync and uninstalls the extra. Steps:
 
 1. NVIDIA driver with CUDA 13.0 or later (`nvidia-smi`), `ffmpeg` and `deno` on `PATH` (deno solves YouTube's challenges for yt-dlp).
 2. `uv sync --package studio --extra separation` (more than 2 GB the first time).
-3. `uv run studio process <url|video_id|file> [--library DIR] [--model-dir DIR]`. A local file also needs `--title` and `--artist`. The default library is `library/` in the current folder, which git ignores. Models download on first use to `--model-dir` (default: audio-separator's own folder; `AUDIO_SEPARATOR_MODEL_DIR` wins over both).
+3. `uv run studio process <url|video_id|file> [--library DIR] [--model-dir DIR]`. A local file also needs `--title` and `--artist`. The default library is `library/` in the current folder, which git ignores. Models download on first use to `--model-dir` (default `~/.cache/audio-separator-models`); the `AUDIO_SEPARATOR_MODEL_DIR` environment variable wins over it, and that folder must exist.
 
 The command prints each step's time and peak VRAM, then the null test (largest error and residual RMS of the stems against the mix). `uv run studio process --help` lists the options.
 

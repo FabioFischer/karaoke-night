@@ -190,31 +190,92 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
         print(f"Already processed: {existing}")
         return 0
 
+    package = build_song(
+        args.library,
+        args.model_dir,
+        tools,
+        source=source,
+        title=title,
+        artist=artist,
+        album=album,
+        duration_s=duration,
+        audio_file=value if kind == "file" else None,
+        report=report,
+    )
+    report["total_seconds"] = _seconds_since(started)
+    _print_report(report)
+    print(f"Wrote {package / 'manifest.json'}")
+    return 0
+
+
+OnStage = Callable[..., None]
+"""on_stage(status, step=None), called as each stage starts; step only while separating."""
+
+
+def _no_stage(status: str, step: str | None = None) -> None:
+    pass
+
+
+def _announced(run: Runner, on_stage: OnStage) -> Runner:
+    def wrapped(step, model_file, audio):
+        on_stage("separating", step)
+        return run(step, model_file, audio)
+
+    return wrapped
+
+
+def build_song(
+    library: Path,
+    model_dir: Path,
+    tools: Tools,
+    *,
+    source: Source,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_s: float | None = None,
+    audio_file: Path | None = None,
+    on_stage: OnStage = _no_stage,
+    report: dict | None = None,
+) -> Path:
+    """Build the package of one song into library and return its folder.
+
+    audio_file is the local file of a file source; a YouTube Music source is
+    downloaded. Without duration_s, the lyrics lookup uses the audio length.
+    report, when given, gets the timings and checks _print_report shows.
+    """
+    report = {"steps": {}} if report is None else report
+    package_id = song_id(title, artist, source_key(source))
+
     def build(out: Path) -> None:
         work = out / "work"
         work.mkdir()
         mix_path = work / "mix.wav"
 
+        on_stage("downloading")
         start = time.perf_counter()
-        if kind == "file":
-            tools.convert(value, mix_path)
+        if audio_file is not None:
+            tools.convert(audio_file, mix_path)
         else:
-            downloaded = tools.download(value, work)
+            downloaded = tools.download(source.video_id, work)
             tools.convert(downloaded, mix_path)
             downloaded.unlink()
         report["download_seconds"] = _seconds_since(start)
 
         mix, _ = sf.read(mix_path, dtype="float32", always_2d=True)
         n_frames = len(mix)
-        runner = tools.make_runner(args.model_dir, work)
+        runner = tools.make_runner(model_dir, work)
         levels: dict = {}
-        stems = cascade(mix, timed(runner, report["steps"]), MODELS, levels)
+        # timed reads the load time and overlap off the runner itself, so it wraps it first.
+        run = _announced(timed(runner, report["steps"]), on_stage)
+        stems = cascade(mix, run, MODELS, levels)
         for step, row in levels.items():
             report["steps"][step].update(row)
         del mix
 
+        on_stage("lyrics")
         start = time.perf_counter()
-        lyrics_duration = round(duration or n_frames / SAMPLE_RATE)
+        lyrics_duration = round(duration_s or n_frames / SAMPLE_RATE)
         try:
             lyrics = lookup(tools.lyrics_get, title, artist, album, lyrics_duration)
         except (LrclibError, OSError, ValueError, http.client.HTTPException) as error:
@@ -223,6 +284,7 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
         report["lyrics_seconds"] = _seconds_since(start)
         report["lyrics"] = lyrics
 
+        on_stage("packaging")
         start = time.perf_counter()
         stems, gain_db = fit_headroom(stems)
         write_package(
@@ -248,11 +310,7 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
             report["null_test"] = None
         shutil.rmtree(work)
 
-    package = build_atomically(args.library, package_id, build)
-    report["total_seconds"] = _seconds_since(started)
-    _print_report(report)
-    print(f"Wrote {package / 'manifest.json'}")
-    return 0
+    return build_atomically(library, package_id, build)
 
 
 def _db(value: float | None) -> str:

@@ -357,7 +357,7 @@ Proposed order:
 | High latency on the Stage machine (DPC or drivers) | Run S1 early. Plan B uses direct monitoring. Use an interface with a native ASIO driver. |
 | Other singers notice the latency more than the maintainer did in S1 | Ask the singers on the first night (A9). Plan B and a native-driver interface remain options. |
 | Studio offline, or no internet at the venue | Preload the library. In the beta, a cloud Studio. |
-| YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. |
+| YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. Measured in the A3 batch with `yt-dlp` 2026.10.26, the latest stable release then: of 21 downloads in a row, 4 were blocked by YouTube, 3 with `HTTP Error 403: Forbidden` on the download after the metadata had worked and 1 with "Sign in to confirm you're not a bot"; tried again minutes later, 3 of the 4 downloaded normally. The code has no retry: the failure is shown, and trying again is left to the person or to the A4 job queue. |
 | Poor lead vs backing separation (duets) | The "no vocals" preset always works. Pick models in S2 and reprocess when better ones appear. |
 | Song missing from LRCLIB, or out of sync | Unsynced lyrics as a fallback. In the beta, offset adjustment in the pre-performance and automatic alignment. |
 | Melody tracking misled by backing residue in the lead stem, melisma, or rap and spoken parts | Ignore sections with low confidence or no pitch, and don't score them. RMVPE (S6) got the octave right on a strong held note where the others jumped up. Ignore notes where the singer is silent. |

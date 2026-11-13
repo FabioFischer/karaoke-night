@@ -10,7 +10,8 @@ from pydantic import TypeAdapter, ValidationError
 from stage.library import describe
 
 _SONGS = TypeAdapter(list[SongSummary])
-# Generous: a stem streams for tens of seconds over a slow venue link.
+# Per operation (connect, each socket read, write, pool), never for a whole
+# request: a stem streams as long as no single wait for data passes 30 s.
 _TIMEOUT = httpx2.Timeout(30.0)
 _RANGE_NOT_SATISFIABLE = 416
 _UNREACHABLE = (httpx2.HTTPError, httpx2.InvalidURL)

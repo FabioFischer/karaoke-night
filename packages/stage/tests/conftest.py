@@ -1,7 +1,9 @@
 import hashlib
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx2
 import pytest
@@ -135,3 +137,115 @@ def refuse_rename(monkeypatch):
         refused.update(names)
 
     return refuse
+
+
+# The template's track order. Index 0 of the web interface is the master.
+TEMPLATE_TRACKS = (
+    "Mic 1",
+    "Mic 2",
+    "Lead",
+    "Backing",
+    "Drums",
+    "Bass",
+    "Guitar",
+    "Piano",
+    "Other",
+)
+_CMD = "SET/EXTSTATE/karaoke/cmd/"
+_ACK = "GET/EXTSTATE/karaoke/ack"
+_TRACK_FIELDS = "1.000000\t0.000000\t-1500\t-1500\t1.000000\t0\t0\t0\t1\t0"
+PLAYING, STOPPED = 1, 0
+
+
+def wire(value: str) -> str:
+    """value as GET/EXTSTATE sends it: newline, tab and backslash escaped."""
+    return value.replace("\\", "\\\\").replace("\n", "\n").replace("\t", "\t")
+
+
+class FakeReaper:
+    """REAPER's web interface and the karaoke listener, as a MockTransport.
+
+    commands holds every web interface command in the order received (one
+    request may carry several, split on ";"), and sent every listener command,
+    decoded. acks(command) gives the ack values the GET/EXTSTATE polls after
+    that command see, in order; the last one repeats. transport is the list of
+    (playstate, position) the TRANSPORT reads return, in order; the last one
+    repeats. on_transport, when set, runs before each TRANSPORT reply with the
+    number of reads so far.
+    """
+
+    def __init__(self, tracks: tuple[str, ...] = TEMPLATE_TRACKS) -> None:
+        self.tracks = list(tracks)
+        self.muted: dict[int, bool] = {}
+        self.commands: list[str] = []
+        self.sent: list[dict] = []
+        self.acks: Callable[[dict], list[str]] = lambda command: [
+            json.dumps({"id": command["id"], "op": command["op"], "ok": True})
+        ]
+        self.transport: list[tuple[int, float]] = [(STOPPED, 0.0)]
+        self.on_transport: Callable[[int], None] | None = None
+        self.transport_reads = 0
+        self._pending: list[str] = []
+
+    def http(self) -> httpx2.Client:
+        return httpx2.Client(transport=httpx2.MockTransport(self.handle))
+
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
+        path = request.url.raw_path.decode("ascii")
+        assert request.url.host == "127.0.0.1", request.url
+        assert request.url.port == 8080, request.url
+        assert path.startswith("/_/"), path
+        lines = [self._reply(command) for command in path[3:].split(";")]
+        return httpx2.Response(200, text="".join(lines))
+
+    def _reply(self, command: str) -> str:
+        self.commands.append(command)
+        if command == "TRACK":
+            names = ["MASTER", *self.tracks]
+            return "".join(
+                f"TRACK\t{index}\t{name}\t{8 if self.muted.get(index) else 0}"
+                f"\t{_TRACK_FIELDS}\n"
+                for index, name in enumerate(names)
+            )
+        if command == "TRANSPORT":
+            self.transport_reads += 1
+            if self.on_transport is not None:
+                self.on_transport(self.transport_reads)
+            state, position = self.transport[
+                min(self.transport_reads, len(self.transport)) - 1
+            ]
+            return f"TRANSPORT\t{state}\t{position:.6f}\t0\t0:00.000\t1.1.00\n"
+        if command.startswith("SET/TRACK/"):
+            _, _, index, field, value = command.split("/")
+            assert field == "MUTE", command
+            self.muted[int(index)] = value == "1"
+            return ""
+        if command.startswith(_CMD):
+            sent = json.loads(unquote(command[len(_CMD) :]))
+            self.sent.append(sent)
+            self._pending = self.acks(sent)
+            return ""
+        if command == _ACK:
+            value = self._pending[0] if self._pending else ""
+            if len(self._pending) > 1:
+                self._pending.pop(0)
+            return f"EXTSTATE\tkaraoke\tack\t{wire(value)}\n"
+        if command.isdigit():
+            return ""
+        raise AssertionError(f"unexpected command {command}")
+
+    def ops(self) -> list[str]:
+        """Listener ops, mutes and actions in the order they reached REAPER."""
+        steps = []
+        for command in self.commands:
+            if command.startswith(_CMD):
+                sent = json.loads(unquote(command[len(_CMD) :]))
+                steps.append(sent["op"])
+            elif command.startswith("SET/TRACK/") or command.isdigit():
+                steps.append(command)
+        return steps
+
+
+@pytest.fixture
+def reaper() -> FakeReaper:
+    return FakeReaper()

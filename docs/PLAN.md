@@ -7,9 +7,9 @@
 *Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1).
 - **Next:**
-  - milestone A4 (Studio API): built and tested with fakes, the live run on the Studio is next;
+  - milestone A5 (Stage library);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -332,6 +332,15 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 - **Port check.** Run twice on the same mix, the A3 stems differ from each other exactly as much as they differ from the S2 package of that song: lead and backing (RoFormer) by about -97 dBFS, under one 16-bit step, and the instruments (Demucs) by 17 to 29 dB of SNR. Demucs is not repeatable from run to run, which S2 never measured, so `gain_db` moves a little too (2.19 to 2.64 dB on one song). The stems still add up, because `other` is the remainder. Reprocessing a song gives slightly different instrument stems; seeding Demucs or turning off its random shifts is an option if that ever matters.
 - **Lyrics** are written as LRCLIB sends them: 2 of the 21 came with CRLF line endings, so the lyrics reader must accept both.
 - **Downloads** were blocked by YouTube now and then (§8): all 4 blocked songs downloaded on a later try, the last about an hour after the batch.
+
+**A4 (2026-11-13): pass.** `studio serve` ran on the Studio over the A3 library (21 packages), and the Stage drove it with `curl` over Tailscale, from the home network.
+
+- **Access:** no token and a wrong token both got 401; `/docs`, `%2E%2E` as a song id and `..%2F` in a file path got 404; a malformed video id and a `file` source got 422.
+- **Dedup:** `POST /jobs` with the video id of a song already in the library, under another title and artist, answered with a job already `done` for the existing package (POST and GET together in 0.33 s). A second POST of a song being processed returned the running job.
+- **A new song (3:59)** went `queued → downloading → separating (vocals, karaoke, instruments) → packaging → done`; `lyrics` lasted less than the 2 s polling interval. The job took 1544 s because the GPU was shared with another application at 99% use the whole time (vocals 1121 s, karaoke 354 s, instruments 18 s), so this run says nothing about the A3 times. Before `downloading`, the job showed `queued` with `attempt` 1 for 36 s while torch and audio-separator were imported; A8 should show that as "starting", not "waiting".
+- **Download:** the package (118 MB, 7 stems plus synced lyrics) came down in 19.2 s, one file after the other, and all 7 stem hashes matched the manifest. A stem cut off after its first 1 MB (a `Range` request) and then resumed with `curl -C -` got 206 and the same hash.
+- **Delete:** with a stem being downloaded, `DELETE /songs/{song_id}` answered 409 and the package stayed whole; once the download stopped, 204, the song left `/songs` and its manifest answered 404. No dot folder was left in the library.
+- **Not run live:** the download retries (proven with fakes only, since a YouTube block cannot be caused on purpose) and `DELETE /songs` (it would have deleted the library).
 
 ### Phase 2: beta
 

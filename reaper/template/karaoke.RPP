@@ -1,0 +1,39 @@
+<REAPER_PROJECT 0.1 "7.0" 0
+  SAMPLERATE 44100 1 0
+  <TRACK
+    NAME "Mic 1"
+    REC 1 0 1 0 0 0 0
+  >
+  <TRACK
+    NAME "Mic 2"
+    REC 1 1 1 0 0 0 0
+  >
+  <TRACK
+    NAME Lead
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
+    NAME Backing
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
+    NAME Drums
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
+    NAME Bass
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
+    NAME Guitar
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
+    NAME Piano
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
+    NAME Other
+    REC 0 0 0 0 0 0 0
+  >
+>

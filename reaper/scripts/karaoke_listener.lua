@@ -16,6 +16,8 @@
 -- Replies:
 --   {"id": 1, "op": "load", "ok": true, "ms": 123.4}
 --   {"id": 1, "op": "load", "ok": false, "error": "..."}
+--   {"id": 1, "ok": false, "error": "cannot decode the command: ..."}
+--   (a command that is not a JSON object; no id when none can be read)
 
 local SECTION = "karaoke"
 local STEMS = { "lead", "backing", "drums", "bass", "guitar", "piano", "other" }
@@ -44,6 +46,8 @@ local function create_track(name)
   reaper.InsertTrackAtIndex(index, true)
   local track = reaper.GetTrack(0, index)
   reaper.GetSetMediaTrackInfo_String(track, "P_NAME", name, true)
+  -- A new track takes the user's default input monitoring, which can be on.
+  reaper.SetMediaTrackInfo_Value(track, "I_RECMON", 0)
   return track
 end
 
@@ -129,7 +133,17 @@ local OPS = {
 -- Returns true when the loop should stop.
 local function handle(raw)
   local start = reaper.time_precise()
-  local cmd = json.decode(raw)
+  local decoded, cmd = pcall(json.decode, raw)
+  if not decoded or type(cmd) ~= "table" then
+    -- The id, when it can still be read, lets the Stage fail at once instead
+    -- of waiting out its timeout.
+    local id = raw:match('"id"%s*:%s*(%-?%d+)')
+    local err = decoded and "not a JSON object" or tostring(cmd)
+    local reply = { id = id and tonumber(id), ok = false,
+                    error = "cannot decode the command: " .. err }
+    reaper.SetExtState(SECTION, "ack", json.encode(reply), false)
+    return false
+  end
   local ok, err = false, "unknown op " .. tostring(cmd.op)
   if OPS[cmd.op] then ok, err = pcall(OPS[cmd.op], cmd) end
   local ack = { id = cmd.id, op = cmd.op, ok = ok }

@@ -4,12 +4,12 @@
 
 ## Status
 
-*Last updated: 2026-11-12*
+*Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1).
 - **Next:**
-  - milestone A4 (Studio API);
+  - milestone A5 (Stage library);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -144,17 +144,25 @@ library/<song_id>/
 
 ### 5.3 Studio API
 
-Every route requires `Authorization: Bearer <token>`.
+FastAPI, started with `studio serve` (`--host` defaults to `0.0.0.0`, `--port` to `8790`, `--library` and `--model-dir` as in `studio process`). It refuses to start without the token in the `STUDIO_TOKEN` environment variable, or without the `separation` extra. Every route requires `Authorization: Bearer <token>`; a missing or wrong token gets 401. The request and response models live in `packages/core/src/core/studio_api.py`, so the Stage client shares them.
 
 | Method | Route | Description |
 |---|---|---|
-| `POST` | `/jobs` | Takes `{source, title, artist, album?, duration_s?}` and returns `{job_id, song_id}`. If a song from the same source (`video_id`) was already processed, it returns the finished package right away. |
-| `GET` | `/jobs/{job_id}` | Status (`queued → downloading → separating → lyrics → packaging → done`, or `failed`) and progress. |
-| `GET` | `/songs` | Master library listing. The Stage mirrors it: it downloads what is missing and removes what is no longer listed. |
-| `GET` | `/songs/{song_id}/manifest` | The package manifest. |
-| `GET` | `/songs/{song_id}/files/{path}` | A package file. Supports `Range`, so downloads can resume. |
-| `DELETE` | `/songs/{song_id}` | Deletes a song from the master library. The Stage removes it on the next sync. |
-| `DELETE` | `/songs` | Deletes the whole master library. |
+| `POST` | `/jobs` | Takes `{source: {type: "youtube_music", video_id}, title, artist, album?, duration_s?}` and returns `{job_id, song_id}`. Only YouTube Music sources are accepted; local files stay with `studio process`. The `video_id` must be 11 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, the rule `studio process` uses, or the request gets 422 at once; packages already in the library are not checked. `song_id` comes from the given title and artist plus the `video_id`, as the CLI computes it, and the Studio fetches no metadata of its own. Without `duration_s`, the lyrics lookup uses the audio length. |
+| `GET` | `/jobs/{job_id}` | `{job_id, song_id, status, step, attempt, retry_at, error}`. 404 for an unknown job. |
+| `GET` | `/songs` | Master library listing, one `{id, title, artist, duration_s, pipeline_version, created_at}` per package. The Stage mirrors it: it downloads what is missing and removes what is no longer listed. |
+| `GET` | `/songs/{song_id}/manifest` | The `manifest.json` bytes as stored on disk, not written back through the model (which would drop unknown fields, §5.2). |
+| `GET` | `/songs/{song_id}/files/{path}` | A file the manifest lists (a stem or the lyrics); any other path, or a listed file missing on disk, is 404. Supports `Range`, so downloads can resume. |
+| `DELETE` | `/songs/{song_id}` | Deletes a song from the master library: 204, or 404 for an unknown song. The Stage removes it on the next sync. |
+| `DELETE` | `/songs` | Deletes the whole master library and returns `{deleted: [...], busy: [...]}`. |
+
+- **Statuses:** `queued → downloading → separating → lyrics → packaging → done`, or `failed`. `step` is set only while `separating`: `vocals`, `karaoke` or `instruments`. `attempt` counts the runs started so far (0 while a new job waits its turn).
+- **Queue:** in memory, one job at a time, since the GPU takes one song at a time. Jobs are lost when the Studio restarts; the library stays the source of truth.
+- **Retries:** only a failure while downloading is tried again, up to 3 times, after 2, 10 and 30 minutes. While it waits, the job is `queued` with `retry_at` set and `error` holding the last error, until the next attempt starts and clears both, and the jobs behind it run in the meantime. After the last retry fails, or after a failure in any later stage, the job is `failed`.
+- **One job per video:** if a package from the same `video_id` is already in the library, `POST /jobs` returns a job that is already `done`, with that package's id, whatever title it was given. If a job for that `video_id` is queued, waiting for a retry or running, it returns that job. A failed job does not count.
+- **Only library ids:** routes that take a `song_id` act only on the ids of the library listing, never on a path built from the URL, so nothing outside the library can be reached. Folders starting with `.` (builds and deletions in flight), folders without a `manifest.json` and folders whose `manifest.json` the model rejects (logged as a warning, once until the file changes) are not listed, so one broken package does not take the rest of the library down.
+- **Deleting:** the package folder is first renamed to a name starting with `.`, then removed. On Windows a folder holding an open file cannot be renamed, so `DELETE /songs/{song_id}` answers 409 and the package stays whole; `DELETE /songs` lists it under `busy`.
+- **Leftovers:** a server stopped mid job leaves its build folder (`.<song_id>.<random>.tmp`), and a removal that could not finish leaves its trash folder (`.<song_id>.<random>.deleting`), where `<random>` is exactly 8 characters of `a-z`, `0-9` and `_`. `studio serve` removes the folders of exactly those two shapes from the library when it starts, before it binds the port, and logs each one it removes or could not fully remove; nothing else is touched. Accepted cost: it cannot tell a leftover from a build still running, so two `studio serve`, or a `studio serve` and a `studio process`, must never run on the same library at once. A second `studio serve` removes the first one's build in flight even when it then fails to start because the port is in use.
 
 ### 5.4 Stage ↔ REAPER
 
@@ -304,25 +312,35 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 ### Phase 1: alpha
 
-The alpha is a test run, not a finished event. The TV mirrors the Stage screen (over HDMI or screen casting) and is driven with the Stage's keyboard and mouse. There is no queue.
+The alpha is a test run, not a finished event. The TV mirrors the Stage screen (over HDMI or screen casting) and is driven with the Stage's keyboard and mouse. The first night (A9) has no queue of participants: songs are picked at the Stage. Public access to the queue and the playlist comes after it, in A10.
 
 | Milestone | Deliverable | Done when |
 |---|---|---|
 | A1 | Repository skeleton: uv workspace, Vite, and ruff, pytest and tsc in GitHub Actions. | CI is green on the first PR. |
 | A2 | `core`: pydantic model of the manifest, with validation and tests. | Tests pass for valid and invalid manifests. |
 | A3 | Studio pipeline CLI: `studio process <url\|file>` produces a complete package. | All 20 test songs are processed, and their stems add up to the original. |
-| A4 | Studio API: FastAPI with jobs, library, files and deletion, running as a service. | The Stage creates a job and downloads the package over Tailscale. |
+| A4 | Studio API (§5.3): FastAPI with jobs, library, files and deletion, started with `studio serve`. | The Stage creates a job and downloads the package over Tailscale. |
 | A5 | Stage library: SQLite, resumable downloads with hash checks, and a sync that mirrors the Studio library (adds and removes). | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
 | A6 | REAPER bridge: session template (pitch correction in chromatic mode), Lua listener, and the Python `Player` (load, play, stop, mute, transpose, position, end of song). | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
-| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). | A full karaoke test session at the venue. |
+| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). The Studio API starts on its own with the Studio machine, with its permanent firewall rule. | A full karaoke test session at the venue. |
+| A10 | Public access on Vercel: participants reach the processing queue and the playlist from the internet. What runs on Vercel and how it reaches the Studio are open (§9); the separation itself cannot run there (it needs the GPU, its jobs take minutes, and `yt-dlp` needs deno). | A participant outside the venue's network adds a song and sees it in the playlist. |
 
 **A3 (2026-11-12): pass.** All 21 test songs processed on the Studio with `studio process`, from their YouTube Music video ids. Every package loads with the §5.2 model, all 147 stem hashes match, every stem is 44.1 kHz stereo 16-bit, and every song has synced LRCLIB lyrics. The stems add up to the mix on every song: the largest sample error was between -76.6 and -80.8 dBFS (3.0 to 4.9 steps of 16 bits) and the residual RMS between -89.5 and -93.0 dBFS. The timed runs took 96 to 259 s per song, download included, and the library came to 2.1 GB.
 
 - **Port check.** Run twice on the same mix, the A3 stems differ from each other exactly as much as they differ from the S2 package of that song: lead and backing (RoFormer) by about -97 dBFS, under one 16-bit step, and the instruments (Demucs) by 17 to 29 dB of SNR. Demucs is not repeatable from run to run, which S2 never measured, so `gain_db` moves a little too (2.19 to 2.64 dB on one song). The stems still add up, because `other` is the remainder. Reprocessing a song gives slightly different instrument stems; seeding Demucs or turning off its random shifts is an option if that ever matters.
 - **Lyrics** are written as LRCLIB sends them: 2 of the 21 came with CRLF line endings, so the lyrics reader must accept both.
 - **Downloads** were blocked by YouTube now and then (§8): all 4 blocked songs downloaded on a later try, the last about an hour after the batch.
+
+**A4 (2026-11-13): pass.** `studio serve` ran on the Studio over the A3 library (21 packages), and the Stage drove it with `curl` over Tailscale, from the home network.
+
+- **Access:** no token and a wrong token both got 401; `/docs`, `%2E%2E` as a song id and `..%2F` in a file path got 404; a malformed video id and a `file` source got 422.
+- **Dedup:** `POST /jobs` with the video id of a song already in the library, under another title and artist, answered with a job already `done` for the existing package (POST and GET together in 0.33 s). A second POST of a song being processed returned the running job.
+- **A new song (3:59)** went `queued → downloading → separating (vocals, karaoke, instruments) → packaging → done`; `lyrics` lasted less than the 2 s polling interval. The job took 1544 s because the GPU was shared with another application at 99% use the whole time (vocals 1121 s, karaoke 354 s, instruments 18 s), so this run says nothing about the A3 times. Before `downloading`, the job showed `queued` with `attempt` 1 for 36 s while torch and audio-separator were imported; A8 should show that as "starting", not "waiting".
+- **Download:** the package (118 MB, 7 stems plus synced lyrics) came down in 19.2 s, one file after the other, and all 7 stem hashes matched the manifest. A stem cut off after its first 1 MB (a `Range` request) and then resumed with `curl -C -` got 206 and the same hash.
+- **Delete:** with a stem being downloaded, `DELETE /songs/{song_id}` answered 409 and the package stayed whole; once the download stopped, 204, the song left `/songs` and its manifest answered 404. No dot folder was left in the library.
+- **Not run live:** the download retries (proven with fakes only, since a YouTube block cannot be caused on purpose) and `DELETE /songs` (it would have deleted the library).
 
 ### Phase 2: beta
 
@@ -362,7 +380,7 @@ Proposed order:
 | High latency on the Stage machine (DPC or drivers) | Run S1 early. Plan B uses direct monitoring. Use an interface with a native ASIO driver. |
 | Other singers notice the latency more than the maintainer did in S1 | Ask the singers on the first night (A9). Plan B and a native-driver interface remain options. |
 | Studio offline, or no internet at the venue | Preload the library. In the beta, a cloud Studio. |
-| YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. Measured in the A3 batch with `yt-dlp` 2026.10.26, the latest stable release then: of 21 downloads in a row, 4 were blocked by YouTube, 3 with `HTTP Error 403: Forbidden` on the download after the metadata had worked and 1 with "Sign in to confirm you're not a bot"; tried again later, all 4 downloaded normally (3 within minutes, the last about an hour later). The code has no retry: the failure is shown, and trying again is left to the person or to the A4 job queue. |
+| YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. Measured in the A3 batch with `yt-dlp` 2026.10.26, the latest stable release then: of 21 downloads in a row, 4 were blocked by YouTube, 3 with `HTTP Error 403: Forbidden` on the download after the metadata had worked and 1 with "Sign in to confirm you're not a bot"; tried again later, all 4 downloaded normally (3 within minutes, the last about an hour later). `studio process` has no retry: the failure is shown, and trying again is left to the person. The Studio API job queue (§5.3) tries a failed download again, and only a download: up to 3 retries, after 2, 10 and 30 minutes. |
 | Poor lead vs backing separation (duets) | The "no vocals" preset always works. Pick models in S2 and reprocess when better ones appear. |
 | Song missing from LRCLIB, or out of sync | Unsynced lyrics as a fallback. In the beta, offset adjustment in the pre-performance and automatic alignment. |
 | Melody tracking misled by backing residue in the lead stem, melisma, or rap and spoken parts | Ignore sections with low confidence or no pitch, and don't score them. RMVPE (S6) got the octave right on a strong held note where the others jumped up. Ignore notes where the singer is silent. |
@@ -376,3 +394,4 @@ Proposed order:
 - [x] Pitch tracker and key detection method (from S6: RMVPE, see §3)
 - [ ] Loudness target between songs (LUFS)
 - [ ] Hardware recommendations confirmed (from S1 and sound tests)
+- [ ] Public access (A10): what runs on Vercel, and how it reaches the Studio, which keeps the separation (GPU, jobs of minutes, `yt-dlp` with deno)

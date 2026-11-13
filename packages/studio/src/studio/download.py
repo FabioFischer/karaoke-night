@@ -1,17 +1,17 @@
 """YouTube Music audio and metadata through yt-dlp, imported only where it runs."""
 
-import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from core.studio_api import VIDEO_ID
+
 WATCH_URL = "https://music.youtube.com/watch?v={}"
-_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _WATCH_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
 
 
 def video_id_from(target: str) -> str | None:
     """The video_id of a YouTube or YouTube Music watch URL, a youtu.be link or a bare id."""
-    if _VIDEO_ID.fullmatch(target):
+    if VIDEO_ID.fullmatch(target):
         return target
     url = urlparse(target)
     if url.scheme not in ("http", "https"):
@@ -22,7 +22,7 @@ def video_id_from(target: str) -> str | None:
         candidate = parse_qs(url.query).get("v", [""])[0]
     else:
         return None
-    return candidate if _VIDEO_ID.fullmatch(candidate) else None
+    return candidate if VIDEO_ID.fullmatch(candidate) else None
 
 
 def source_metadata(info: dict) -> dict:

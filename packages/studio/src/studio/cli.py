@@ -1,8 +1,10 @@
-"""The `studio` command line: `studio process <url|video_id|file>`."""
+"""The `studio` command line: `studio process <url|video_id|file>` and `studio serve`."""
 
 import argparse
 import http.client
 import importlib.util
+import logging
+import os
 import shutil
 import sys
 import time
@@ -11,11 +13,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import soundfile as sf
+import uvicorn
 from core.manifest import FileSource, Source, YouTubeMusicSource
+from core.studio_api import JobRequest
 
 from studio import audio, download
+from studio.api import create_app
 from studio.audio import SAMPLE_RATE, fit_headroom, null_test
 from studio.download import source_metadata, video_id_from
+from studio.jobs import Build, JobQueue
+from studio.library import remove_leftovers
 from studio.lyrics import PAUSE_S, LrclibError, Paced, lookup, lrclib_get
 from studio.package import (
     build_atomically,
@@ -40,10 +47,17 @@ INSTALL_HINT = "uv sync --package studio --extra separation"
 DEFAULT_LIBRARY = Path("library")
 # The folder spike S2 used, instead of audio-separator's /tmp/audio-separator-models/.
 DEFAULT_MODEL_DIR = Path.home() / ".cache" / "audio-separator-models"
+DEFAULT_HOST = "0.0.0.0"
+DEFAULT_PORT = 8790
+TOKEN_VARIABLE = "STUDIO_TOKEN"
 
 
 def _paced_lrclib():
     return Paced(lrclib_get, PAUSE_S)
+
+
+def _run_server(app, host: str, port: int) -> None:
+    uvicorn.run(app, host=host, port=port)
 
 
 @dataclass
@@ -56,6 +70,7 @@ class Tools:
     convert: Callable[[Path, Path], None] = audio.convert
     make_runner: Callable[[Path, Path], Runner] = AudioSeparatorRunner
     lyrics_get: Callable = field(default_factory=_paced_lrclib)
+    serve: Callable[..., None] = _run_server
 
 
 def resolve_target(target: str) -> tuple[str, Path | str] | None:
@@ -67,6 +82,23 @@ def resolve_target(target: str) -> tuple[str, Path | str] | None:
     if video_id is not None:
         return "youtube", video_id
     return None
+
+
+def _add_folder_options(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
+        "--library",
+        type=Path,
+        default=DEFAULT_LIBRARY,
+        help="the library folder (default: library, in the current folder)",
+    )
+    command.add_argument(
+        "--model-dir",
+        type=Path,
+        default=DEFAULT_MODEL_DIR,
+        help="where audio-separator downloads and caches models "
+        "(default: ~/.cache/audio-separator-models); the AUDIO_SEPARATOR_MODEL_DIR "
+        "environment variable wins over it, and that folder must exist",
+    )
 
 
 def build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
@@ -97,21 +129,30 @@ def build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         "--artist",
         help="song artist: required for a local file, replaces the YouTube one otherwise",
     )
-    process.add_argument(
-        "--library",
-        type=Path,
-        default=DEFAULT_LIBRARY,
-        help="the library folder (default: library, in the current folder)",
-    )
-    process.add_argument(
-        "--model-dir",
-        type=Path,
-        default=DEFAULT_MODEL_DIR,
-        help="where audio-separator downloads and caches models "
-        "(default: ~/.cache/audio-separator-models); the AUDIO_SEPARATOR_MODEL_DIR "
-        "environment variable wins over it, and that folder must exist",
-    )
+    _add_folder_options(process)
     process.set_defaults(error=process.error)
+
+    serve = commands.add_parser(
+        "serve",
+        help="run the Studio API",
+        description=(
+            "Serve the Studio API: song jobs, run one at a time into the library, "
+            "and the library's packages. Every request needs the token in the "
+            f"{TOKEN_VARIABLE} environment variable, as 'Authorization: Bearer <token>'."
+        ),
+    )
+    _add_folder_options(serve)
+    serve.add_argument(
+        "--host",
+        default=DEFAULT_HOST,
+        help=f"the address to listen on (default: {DEFAULT_HOST}, every interface)",
+    )
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"the port to listen on (default: {DEFAULT_PORT})",
+    )
     return parser, process
 
 
@@ -142,7 +183,8 @@ def main(argv: list[str] | None = None, tools: Tools | None = None) -> int:
     parser, process_parser = build_parser()
     argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(_hyphen_ids_last(process_parser, argv))
-    return process(args, tools or Tools())
+    command = process if args.command == "process" else serve
+    return command(args, tools or Tools())
 
 
 def _warn(message: str) -> None:
@@ -153,6 +195,56 @@ def _seconds_since(start: float) -> float:
     return round(time.perf_counter() - start, 2)
 
 
+def _lacks_extra(command: str, tools: Tools) -> bool:
+    missing = [name for name in EXTRA_MODULES if tools.find_spec(name) is None]
+    if missing:
+        print(
+            f"studio {command} needs the separation extra ({', '.join(missing)} "
+            f"not installed). Install it with:\n  {INSTALL_HINT}",
+            file=sys.stderr,
+        )
+    return bool(missing)
+
+
+def _log_studio_lines() -> None:
+    """Send the studio.* log lines to stderr with time and level.
+
+    uvicorn configures only its own loggers, and without a handler logging
+    prints warnings bare and drops info lines.
+    """
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logger = logging.getLogger("studio")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
+def serve(args: argparse.Namespace, tools: Tools) -> int:
+    token = os.environ.get(TOKEN_VARIABLE)
+    if not token:
+        print(
+            f"studio serve needs the {TOKEN_VARIABLE} environment variable: the "
+            "token every request must send as 'Authorization: Bearer <token>'",
+            file=sys.stderr,
+        )
+        return 1
+    if _lacks_extra("serve", tools):
+        return 1
+
+    _log_studio_lines()
+    # The worker is a daemon thread, so a stopped server leaves its build behind.
+    remove_leftovers(args.library)
+    queue = JobQueue(song_builder(args.library, args.model_dir, tools))
+    queue.start()
+    try:
+        tools.serve(create_app(args.library, token, queue), args.host, args.port)
+    finally:
+        queue.stop()
+    return 0
+
+
 def process(args: argparse.Namespace, tools: Tools) -> int:
     target = resolve_target(args.target)
     if target is None:
@@ -161,13 +253,7 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
     if kind == "file" and not (args.title and args.artist):
         args.error("a local file needs --title and --artist")
 
-    missing = [name for name in EXTRA_MODULES if tools.find_spec(name) is None]
-    if missing:
-        print(
-            f"studio process needs the separation extra ({', '.join(missing)} "
-            f"not installed). Install it with:\n  {INSTALL_HINT}",
-            file=sys.stderr,
-        )
+    if _lacks_extra("process", tools):
         return 1
 
     started = time.perf_counter()
@@ -190,31 +276,94 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
         print(f"Already processed: {existing}")
         return 0
 
+    package = build_song(
+        args.library,
+        args.model_dir,
+        tools,
+        source=source,
+        title=title,
+        artist=artist,
+        album=album,
+        duration_s=duration,
+        audio_file=value if kind == "file" else None,
+        report=report,
+    )
+    report["total_seconds"] = _seconds_since(started)
+    _print_report(report)
+    print(f"Wrote {package / 'manifest.json'}")
+    return 0
+
+
+OnStage = Callable[..., None]
+"""on_stage(status, step=None), called as each stage starts; step only while separating."""
+
+
+def _no_stage(status: str, step: str | None = None) -> None:
+    pass
+
+
+def _announced(run: Runner, on_stage: OnStage) -> Runner:
+    def wrapped(step, model_file, audio):
+        on_stage("separating", step)
+        return run(step, model_file, audio)
+
+    return wrapped
+
+
+def build_song(
+    library: Path,
+    model_dir: Path,
+    tools: Tools,
+    *,
+    source: Source,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_s: float | None = None,
+    audio_file: Path | None = None,
+    on_stage: OnStage = _no_stage,
+    report: dict | None = None,
+) -> Path:
+    """Build the package of one song into library and return its folder.
+
+    audio_file is the local file of a file source; a YouTube Music source is
+    downloaded. Without duration_s, the lyrics lookup uses the audio length.
+    report, when given, gets the timings and checks _print_report shows.
+    """
+    report = {"steps": {}} if report is None else report
+    package_id = song_id(title, artist, source_key(source))
+
     def build(out: Path) -> None:
         work = out / "work"
         work.mkdir()
         mix_path = work / "mix.wav"
+        # Created before the download, so a runner that cannot start is never
+        # mistaken for a download failure, the only kind a job tries again.
+        runner = tools.make_runner(model_dir, work)
 
+        on_stage("downloading")
         start = time.perf_counter()
-        if kind == "file":
-            tools.convert(value, mix_path)
+        if audio_file is not None:
+            tools.convert(audio_file, mix_path)
         else:
-            downloaded = tools.download(value, work)
+            downloaded = tools.download(source.video_id, work)
             tools.convert(downloaded, mix_path)
             downloaded.unlink()
         report["download_seconds"] = _seconds_since(start)
 
         mix, _ = sf.read(mix_path, dtype="float32", always_2d=True)
         n_frames = len(mix)
-        runner = tools.make_runner(args.model_dir, work)
         levels: dict = {}
-        stems = cascade(mix, timed(runner, report["steps"]), MODELS, levels)
+        # timed reads the load time and overlap off the runner itself, so it wraps it first.
+        run = _announced(timed(runner, report["steps"]), on_stage)
+        stems = cascade(mix, run, MODELS, levels)
         for step, row in levels.items():
             report["steps"][step].update(row)
         del mix
 
+        on_stage("lyrics")
         start = time.perf_counter()
-        lyrics_duration = round(duration or n_frames / SAMPLE_RATE)
+        lyrics_duration = round(duration_s or n_frames / SAMPLE_RATE)
         try:
             lyrics = lookup(tools.lyrics_get, title, artist, album, lyrics_duration)
         except (LrclibError, OSError, ValueError, http.client.HTTPException) as error:
@@ -223,6 +372,7 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
         report["lyrics_seconds"] = _seconds_since(start)
         report["lyrics"] = lyrics
 
+        on_stage("packaging")
         start = time.perf_counter()
         stems, gain_db = fit_headroom(stems)
         write_package(
@@ -248,11 +398,26 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
             report["null_test"] = None
         shutil.rmtree(work)
 
-    package = build_atomically(args.library, package_id, build)
-    report["total_seconds"] = _seconds_since(started)
-    _print_report(report)
-    print(f"Wrote {package / 'manifest.json'}")
-    return 0
+    return build_atomically(library, package_id, build)
+
+
+def song_builder(library: Path, model_dir: Path, tools: Tools) -> Build:
+    """The build of a Studio API job: the request gives the title and artist."""
+
+    def build(request: JobRequest, on_stage: OnStage) -> None:
+        build_song(
+            library,
+            model_dir,
+            tools,
+            source=request.source,
+            title=request.title,
+            artist=request.artist,
+            album=request.album,
+            duration_s=request.duration_s,
+            on_stage=on_stage,
+        )
+
+    return build
 
 
 def _db(value: float | None) -> str:

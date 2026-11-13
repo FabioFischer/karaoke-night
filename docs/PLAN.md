@@ -7,9 +7,9 @@
 *Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4) built and tested locally against a fake web interface: listener, session template, `Player` and `stage play`.
 - **Next:**
-  - milestone A6 (REAPER bridge);
+  - the A6 live run in REAPER on the Stage (template, startup line, end of song rule), then the guided test of pitch correction options for the effects chain guide;
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -61,7 +61,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 
    With every stem on, you hear the original recording without separation artifacts. The goal is to get as close to the original as possible, not bit-exact: writing each stem to 16-bit FLAC adds tiny differences, which are accepted. Tests compare against the original within a tolerance.
 3. **Song packages are immutable and versioned** (`pipeline_version`). When a better model comes out, the library gets reprocessed.
-4. **The player sits behind an interface.** Stage code talks to a `Player` interface (`load`, `play`, `stop`, `set_mute`, `transpose`, `position`), and REAPER is just one implementation of it. This leaves room to replace REAPER later.
+4. **The player sits behind an interface.** Stage code talks to a `Player` interface (`load`, `play`, `stop`, `set_mute`, `transpose`, `position`, `ended`), and REAPER is just one implementation of it (`ReaperPlayer`, in `packages/stage/src/stage/player.py`). This leaves room to replace REAPER later.
 5. **REAPER owns the audio.** The app never opens the audio device.
 
 ## 5. Architecture
@@ -175,16 +175,22 @@ FastAPI, started with `studio serve` (`--host` defaults to `0.0.0.0`, `--port` t
 | `/_/SET/TRACK/{i}/MUTE/{0\|1}` | Turns a stem on or off. |
 | `/_/1007`, `/_/1016`, `/_/40042` | Play, stop, and go to the start of the project. |
 
-**Lua listener**, for anything the web interface doesn't cover. It runs in a `defer` loop, started by `__startup.lua` when REAPER opens.
+`play` sends `40042` then `1007`, so a song always plays from its start. The Stage builds the name → index map from `TRACK` when it connects and again after each `load` (which can create tracks), lowercase as the listener matches names, skipping the master (index 0); of two tracks with one name, the first wins.
+
+**Lua listener** (`reaper/scripts/karaoke_listener.lua`), for anything the web interface doesn't cover. It runs in a `defer` loop, started when REAPER opens by one line in `Scripts/__startup.lua` of REAPER's resource folder: `dofile([[<clone>\reaper\scripts\karaoke_listener.lua]])`. It finds its own folder (for `lib/json.lua`) from the source of its own chunk (`debug.getinfo(1, "S").source`), which names the listener file both under `dofile` and when it runs as an action; the action context would name `__startup.lua`. Setup steps: `reaper/README.md`.
 
 - **Request:** the Stage sets `SET/EXTSTATE/karaoke/cmd/<URL-encoded JSON>`, for example `{"id": 42, "op": "load", "manifest": "C:\\...\\manifest.json"}`.
-- **Reply:** the listener runs the command and writes `{"id": 42, "ok": true}` to `karaoke/ack`. The Stage reads it with `GET/EXTSTATE/karaoke/ack` and matches the `id`.
-- **One command at a time:** `cmd` and `ack` are single slots, so the Stage sends the next command only after the previous ack.
-- **Operations:**
+- **Reply:** the listener runs the command and writes `{"id": 42, "op": "load", "ok": true, "ms": 12.3}` (or `"ok": false, "error": "…"`) to `karaoke/ack`. The Stage reads it with `GET/EXTSTATE/karaoke/ack` and matches the `id`; an ack with another id (the previous command's) is skipped. `GET/EXTSTATE` escapes newlines, tabs and backslashes as `\n`, `\t` and `\`, decoded in one pass.
+- **One command at a time:** `cmd` and `ack` are single slots, so the Stage sends the next command only after the previous ack. With no matching ack within 5 s, the Stage reports that the listener did not answer and says to restart it (S3 round 2 saw it stop answering once).
+- **Operations:** `load`, `transpose`, `ping` (an empty round trip) and `quit` (stops the listener).
   - `load`: removes the previous song's items, inserts each stem on the track of the same name and applies `gain_db`. The project end follows the stems, as long as nothing else on the timeline runs longer (an item left on a mic track would).
   - `transpose`: shifts the key on every stem **except drums**. Drums have no key, and pitch shifting only degrades them. It is sent at setup, before playback starts.
 
-**Session template:** "stop playback at end of project" is enabled, the mic tracks are armed with input monitoring on, and the stem tracks have input monitoring off (tracks created with REAPER's defaults inherit the user's default, which can be on). The effects chain on the mic tracks is left to the person running REAPER (§3).
+**Session template** (`reaper/template/karaoke.RPP`, hand-written; REAPER fills in the rest with its defaults): project sample rate 44.1 kHz; `Mic 1` and `Mic 2` on mono inputs 1 and 2, armed, with input monitoring on; then `Lead`, `Backing`, `Drums`, `Bass`, `Guitar`, `Piano` and `Other`, not armed, with input monitoring off (tracks created with REAPER's defaults inherit the user's default, which can be on). No effects anywhere: the effects chain on the mic tracks is left to the person running REAPER (§3), and its guide comes from a guided test. "Stop/repeat playback at end of project" is a REAPER preference, not part of the project, so it is in the setup checklist of `reaper/README.md`.
+
+**End of song**, to be confirmed live: the song has ended when playback goes from playing (playstate 1, or 5 while recording) to anything else without the Stage asking to stop. A pause or a stop made by hand in REAPER counts as the end too. How REAPER reports the stop at the end of the project (the position and playstate right at the stop) is not measured yet, so the manifest's `duration_s` plays no part in the rule, which lives in one function (`song_ended` in `player.py`).
+
+**`stage play <song_id>`** (`--library DIR`, `--mute STEM ...`, `--transpose N`) loads a song of the library, mutes the stems given and unmutes every other one (so the previous song's mutes do not stay), sends the transpose (0 by default), plays from the start and prints the position once per second of the song, one line each, until the song ends (exit 0). Ctrl+C stops playback and exits 130. An unknown song id, an unreachable REAPER, a listener that does not answer and a failed command exit 1; an unknown stem in `--mute` is a usage error (exit 2) that lists the song's stems.
 
 ### 5.5 Repository layout
 
@@ -202,8 +208,9 @@ karaoke-night/
 │  └─ stage/                    # Stage: local server, library, REAPER bridge, session
 ├─ web/                         # React + Vite + TS: TV screen (in the beta, also the phone page)
 ├─ reaper/
-│  ├─ scripts/                  # __startup.lua, karaoke_listener.lua, lib/json.lua
-│  └─ template/                 # base session (.RPP) + effects chain guide
+│  ├─ README.md                 # setup checklist, effects chain guide
+│  ├─ scripts/                  # karaoke_listener.lua, lib/json.lua
+│  └─ template/                 # base session (karaoke.RPP)
 └─ .github/workflows/ci.yml     # ruff + pytest + tsc
 ```
 
@@ -335,7 +342,7 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A3 | Studio pipeline CLI: `studio process <url\|file>` produces a complete package. | All 20 test songs are processed, and their stems add up to the original. |
 | A4 | Studio API (§5.3): FastAPI with jobs, library, files and deletion, started with `studio serve`. | The Stage creates a job and downloads the package over Tailscale. |
 | A5 | Stage library (§5.6): the folder of packages, with no SQLite (it comes with the play history), resumable downloads with hash checks, and `stage sync`, which mirrors the Studio library (adds, updates and removes), plus `stage list`. | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
-| A6 | REAPER bridge: session template (pitch correction in chromatic mode), Lua listener, and the Python `Player` (load, play, stop, mute, transpose, position, end of song). | A song plays from start to end driven only by the Stage. |
+| A6 | REAPER bridge: session template (mic and stem tracks, no effects), Lua listener, the Python `Player` (load, play, stop, mute, transpose, position, end of song) and `stage play`. The pitch correction is no longer in the template: the effects chain guide comes from a guided test of pitch correction options. | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
 | A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). The Studio API starts on its own with the Studio machine, with its permanent firewall rule. | A full karaoke test session at the venue. |

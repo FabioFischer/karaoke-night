@@ -359,3 +359,63 @@ def test_help_lists_only_the_planned_options(capsys) -> None:
 
     options = set(re.findall(r"--[a-z-]+", capsys.readouterr().out))
     assert options == {"--help", "--title", "--artist", "--library", "--model-dir"}
+
+
+HYPHEN_ID = "-XXXXXXXXXX"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [HYPHEN_ID, "--library", "{library}"],
+        ["--library", "{library}", HYPHEN_ID],
+        ["--library", "{library}", "--", HYPHEN_ID],
+        ["--model-dir", "{library}", "--library", "{library}", HYPHEN_ID],
+    ],
+    ids=["before-options", "after-options", "after-double-dash", "after-model-dir"],
+)
+def test_video_id_starting_with_a_hyphen_is_the_target(
+    tmp_path: Path, recorder: Recorder, args: list[str]
+) -> None:
+    library = str(tmp_path / "library")
+
+    code = run(recorder, *(arg.replace("{library}", library) for arg in args))
+
+    assert code == 0
+    assert recorder.calls[0] == ("fetch_info", HYPHEN_ID)
+    (package,) = (tmp_path / "library").iterdir()
+    manifest = Manifest.load(package / "manifest.json")
+    assert manifest.source == YouTubeMusicSource(
+        type="youtube_music", video_id=HYPHEN_ID
+    )
+
+
+def test_unknown_option_still_fails(tmp_path: Path, recorder: Recorder, capsys) -> None:
+    with pytest.raises(SystemExit) as caught:
+        run(recorder, VIDEO_ID, "-x", "--library", str(tmp_path))
+
+    assert caught.value.code == 2
+    assert "unrecognized arguments: -x" in capsys.readouterr().err
+    assert recorder.calls == []
+
+
+def test_local_file_starting_with_a_hyphen_works_after_double_dash(
+    tmp_path: Path, recorder: Recorder, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path("-song.m4a").write_bytes(b"placeholder audio bytes")
+
+    code = run(
+        recorder,
+        "--title",
+        "Song Title",
+        "--artist",
+        "Artist Name",
+        "--library",
+        "library",
+        "--",
+        "-song.m4a",
+    )
+
+    assert code == 0
+    assert ("convert", "-song.m4a") in recorder.calls

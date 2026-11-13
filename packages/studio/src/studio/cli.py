@@ -69,7 +69,8 @@ def resolve_target(target: str) -> tuple[str, Path | str] | None:
     return None
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
+    """The `studio` parser and its `process` subparser."""
     parser = argparse.ArgumentParser(
         prog="studio", description="The Studio pipeline for karaoke-night."
     )
@@ -111,11 +112,36 @@ def build_parser() -> argparse.ArgumentParser:
         "environment variable wins over it, and that folder must exist",
     )
     process.set_defaults(error=process.error)
-    return parser
+    return parser, process
+
+
+def _hyphen_ids_last(process: argparse.ArgumentParser, argv: list[str]) -> list[str]:
+    """Move a bare video id that starts with "-" after "--".
+
+    YouTube ids can start with "-", and argparse would read one as an option.
+    Only tokens before an existing "--" that no option of process starts with move.
+    """
+    if not argv or argv[0] != "process":
+        return argv
+    end = argv.index("--") if "--" in argv else len(argv)
+    known = [option for action in process._actions for option in action.option_strings]
+    ids = [
+        token
+        for token in argv[1:end]
+        if token.startswith("-")
+        and video_id_from(token) == token
+        and not any(option.startswith(token) for option in known)
+    ]
+    if not ids:
+        return argv
+    head = [token for token in argv[:end] if token not in ids]
+    return [*head, "--", *ids, *argv[end + 1 :]]
 
 
 def main(argv: list[str] | None = None, tools: Tools | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser, process_parser = build_parser()
+    argv = sys.argv[1:] if argv is None else argv
+    args = parser.parse_args(_hyphen_ids_last(process_parser, argv))
     return process(args, tools or Tools())
 
 

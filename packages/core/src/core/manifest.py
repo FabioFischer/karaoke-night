@@ -47,7 +47,14 @@ class YouTubeMusicSource(_Model):
     video_id: str
 
 
-Source = Annotated[YouTubeMusicSource, Field(discriminator="type")]
+class FileSource(_Model):
+    """A local audio file, identified by the sha256 of the file as given."""
+
+    type: Literal["file"]
+    sha256: Sha256
+
+
+Source = Annotated[YouTubeMusicSource | FileSource, Field(discriminator="type")]
 
 
 class Stem(_Model):

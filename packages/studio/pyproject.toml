@@ -3,10 +3,33 @@ name = "studio"
 version = "0.1.0"
 description = "Studio: song jobs, download, separation and lyrics."
 requires-python = ">=3.12"
-dependencies = ["core"]
+dependencies = [
+    "core",
+    "numpy",
+    "soundfile",
+]
+
+[project.optional-dependencies]
+# The GPU stack, only on the Studio: `uv sync --package studio --extra separation`.
+separation = [
+    "audio-separator[gpu]==0.48.0",
+    # Not in the tree librosa 1.x resolves; the S2 environment the models were chosen in had it.
+    "audioread",
+    "torch",
+    "yt-dlp[default]",
+]
+
+[project.scripts]
+studio = "studio.cli:main"
 
 [tool.uv.sources]
 core = { workspace = true }
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]

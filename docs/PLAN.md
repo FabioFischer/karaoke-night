@@ -7,9 +7,9 @@
 *Last updated: 2026-11-12*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1).
 - **Next:**
-  - milestone A3 (Studio pipeline CLI);
+  - milestone A4 (Studio API);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -132,6 +132,7 @@ library/<song_id>/
 ```
 
 - **`gain_db`:** the gain REAPER applies on playback. Today it holds the headroom compensation from S2 (see Clipping below). Whether it also brings every song to one loudness target is still open, and so is that target in LUFS.
+- **`source`:** where the audio came from, by `type`. `{"type": "youtube_music", "video_id": "…"}` for a YouTube Music video, and `{"type": "file", "sha256": "…"}` for a local audio file, with the sha256 of the file as given (before any conversion). Any other `type` is rejected.
 - **`lyrics`:** optional. It is absent when LRCLIB has no lyrics for the song or the song is instrumental.
 - **Unknown fields are ignored**, not rejected, so an older Stage keeps reading a manifest that a newer `pipeline_version` wrote (for example one that adds melody data). They are also dropped on write: a Stage that loads and then writes a newer manifest loses those fields. Note for A5: the Stage library must account for this, for example by keeping the downloaded `manifest.json` as is.
 - **Paths stay inside the package:** every `file` (stems and lyrics) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.
@@ -317,6 +318,12 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
 | A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). | A full karaoke test session at the venue. |
 
+**A3 (2026-11-12): pass.** All 21 test songs processed on the Studio with `studio process`, from their YouTube Music video ids. Every package loads with the §5.2 model, all 147 stem hashes match, every stem is 44.1 kHz stereo 16-bit, and every song has synced LRCLIB lyrics. The stems add up to the mix on every song: the largest sample error was between -76.6 and -80.8 dBFS (3.0 to 4.9 steps of 16 bits) and the residual RMS between -89.5 and -93.0 dBFS. The timed runs took 96 to 259 s per song, download included, and the library came to 2.1 GB.
+
+- **Port check.** Run twice on the same mix, the A3 stems differ from each other exactly as much as they differ from the S2 package of that song: lead and backing (RoFormer) by about -97 dBFS, under one 16-bit step, and the instruments (Demucs) by 17 to 29 dB of SNR. Demucs is not repeatable from run to run, which S2 never measured, so `gain_db` moves a little too (2.19 to 2.64 dB on one song). The stems still add up, because `other` is the remainder. Reprocessing a song gives slightly different instrument stems; seeding Demucs or turning off its random shifts is an option if that ever matters.
+- **Lyrics** are written as LRCLIB sends them: 2 of the 21 came with CRLF line endings, so the lyrics reader must accept both.
+- **Downloads** were blocked by YouTube now and then (§8): all 4 blocked songs downloaded on a later try, the last about an hour after the batch.
+
 ### Phase 2: beta
 
 Proposed order:
@@ -355,7 +362,7 @@ Proposed order:
 | High latency on the Stage machine (DPC or drivers) | Run S1 early. Plan B uses direct monitoring. Use an interface with a native ASIO driver. |
 | Other singers notice the latency more than the maintainer did in S1 | Ask the singers on the first night (A9). Plan B and a native-driver interface remain options. |
 | Studio offline, or no internet at the venue | Preload the library. In the beta, a cloud Studio. |
-| YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. |
+| YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. Measured in the A3 batch with `yt-dlp` 2026.10.26, the latest stable release then: of 21 downloads in a row, 4 were blocked by YouTube, 3 with `HTTP Error 403: Forbidden` on the download after the metadata had worked and 1 with "Sign in to confirm you're not a bot"; tried again later, all 4 downloaded normally (3 within minutes, the last about an hour later). The code has no retry: the failure is shown, and trying again is left to the person or to the A4 job queue. |
 | Poor lead vs backing separation (duets) | The "no vocals" preset always works. Pick models in S2 and reprocess when better ones appear. |
 | Song missing from LRCLIB, or out of sync | Unsynced lyrics as a fallback. In the beta, offset adjustment in the pre-performance and automatic alignment. |
 | Melody tracking misled by backing residue in the lead stem, melisma, or rap and spoken parts | Ignore sections with low confidence or no pitch, and don't score them. RMVPE (S6) got the octave right on a strong held note where the others jumped up. Ignore notes where the singer is silent. |

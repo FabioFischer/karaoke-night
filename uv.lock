@@ -2187,10 +2187,14 @@ version = "0.1.0"
 source = { editable = "packages/stage" }
 dependencies = [
     { name = "core" },
+    { name = "httpx2" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "core", editable = "packages/core" }]
+requires-dist = [
+    { name = "core", editable = "packages/core" },
+    { name = "httpx2", specifier = ">=2.16.0" },
+]
 
 [[package]]
 name = "standard-aifc"

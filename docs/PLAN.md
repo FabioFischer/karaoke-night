@@ -7,9 +7,9 @@
 *Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1).
 - **Next:**
-  - milestone A5 (Stage library);
+  - milestone A6 (REAPER bridge);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -39,7 +39,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Stem format | FLAC 16-bit/44.1 kHz, in a package with a `manifest.json`. | Lossless. About 25 to 30 MB per minute of song (S2). |
 | Lyrics | LRCLIB, line-synced, **already in the alpha**. | The API is free, and karaoke without lyrics doesn't work. |
 | Player | REAPER with a fixed session that stays open all night, driven by its built-in web interface (HTTP) and a resident Lua script. | The effects chain stays under full manual control in REAPER. |
-| Storage | SQLite on the Stage (local library and history), plus files on disk. | No infrastructure to run. |
+| Storage | In the alpha the Stage library is the folder of packages on disk, with no database. SQLite comes with the play history. | No infrastructure to run, and nothing to keep in step with the folders until there is data that is not in them. |
 | Microphones | The REAPER template ships with 2 mic tracks from day one. | The beta needs two singers, and this avoids rebuilding the template. |
 | Vocal effects | The effects chain is free and controlled by hand in REAPER on the Stage (for example pitch correction, reverb, delay, compression, doubling). The app never picks plugins. In the beta it only provides data that the chain may use (§6, Phase 2). | Effects need room to evolve, and REAPER is the right place to tune them. |
 | Melody and key | RMVPE (`rmvpe-onnx`, on the CPU) on the lead stem, grouped into notes; key per section from the notes plus the instrumental's chroma, with Krumhansl-Kessler profiles over 16 s windows and a Viterbi smoothing. Chosen in S6. | Got the octave right where the other trackers jumped up on a strong held note, fewest chromatic artifacts, and about 0.5 s per minute of song. |
@@ -80,7 +80,7 @@ STUDIO · machine with an NVIDIA GPU
 STAGE · Windows machine at the venue
   stage (FastAPI) ◄── HTTP / WebSocket ──► full-screen browser on the TV
   ├─ search: ytmusicapi (+ yt-dlp)
-  ├─ local library: SQLite + packages
+  ├─ local library: package folders
   ├─ session: state machine
   └─ REAPER bridge ── HTTP + ExtState ──► REAPER (fixed session)
                                            ├─ Lua listener (load song, transpose)
@@ -209,6 +209,20 @@ karaoke-night/
 
 `core` is kept separate so the Stage never has to install torch.
 
+### 5.6 Stage library
+
+The folder is the library: one package per folder, named by its song id, as in §5.2, with `manifest.json` kept byte for byte as the Studio sent it (§5.2, unknown fields). There is no database in the alpha. `stage list` lists it with no network; `stage sync --studio URL` mirrors the Studio library (§3, Library sync), with the token in the `STUDIO_TOKEN` environment variable. Folders starting with `.` are never listed.
+
+- **What a sync does:** a song the Studio lists and the Stage lacks is downloaded; one the Stage holds with a different `created_at` or `pipeline_version` is downloaded again (a reprocessed song keeps its id and gets a new `created_at`); one the Stage holds and the Studio no longer lists is removed. There is no guard on an empty or shrunk listing: an empty listing empties the Stage.
+- **Downloads** go into `<library>/.<song_id>.partial/`, one file after the other over one kept-alive connection, and survive between runs. The downloaded manifest is kept there, and a later sync resumes from it while it still matches the listing (`created_at` and `pipeline_version`); otherwise the partial is discarded and the song starts over. A file already partly on disk is resumed with `Range: bytes=<size>-`: a 206 is appended, a 200 rewrites the file from zero, and a 416 (nothing left to send) asks for the whole file again.
+- **Hash checks:** each stem is checked against its manifest `sha256` after its download, and a stem already whole in the partial is not fetched again. A stem that does not match is deleted, the song is not installed in that sync and is reported as failed, and the next sync downloads that stem again. Lyrics have no hash in the manifest, so they are downloaded without a check.
+- **Install:** a new song is renamed from its partial to `<song_id>`. An update renames the old folder to a trash name, renames the new one in, then removes the old one, so the old version is replaced only once the new one is complete. If the new one cannot be renamed in, the old one is renamed back and the song is reported as failed; the complete partial is kept, so a later sync installs it. If the old one cannot be renamed back either, the song is missing until the next sync, which removes the trash folder and installs the partial.
+- **Busy:** on Windows a folder holding an open file cannot be renamed, and REAPER keeps the stems of the loaded song open. A song that cannot be removed stays whole; on an update the old version stays in place and the complete partial is kept, so a later sync installs it. Both are reported as busy.
+- **Song ids:** an id from the Studio becomes a folder name the Stage creates and deletes, so only the shape the Studio generates is accepted: slugs of `a-z`, `0-9` and `-` joined by `--`, then 6 hex digits (`song-title--artist-name--a1b2c3`). A song listed under any other id is skipped with a warning, and nothing is written or deleted under that id, not even a local folder of the same name.
+- **Unreachable Studio:** if the listing fails (no connection, or an error answer such as 401), nothing in the library changes and `stage sync` exits with 1. A failure on one song (a file that fails to download or to match) does not stop the others, and the sync exits with 1 if any song failed.
+- **Leftovers:** a sync removes the partials of songs the Studio no longer lists and its own trash folders (`.<song_id>.<8 hex digits>.deleting`) that a removal could not finish. No other folder is touched.
+- **Output:** one line per song acted on (`added`, `updated`, `removed`, `busy` or `failed`, with the reason for the last two), then a line with the counts, the megabytes downloaded and the seconds taken.
+
 ---
 
 ## 6. Execution plan
@@ -320,7 +334,7 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A2 | `core`: pydantic model of the manifest, with validation and tests. | Tests pass for valid and invalid manifests. |
 | A3 | Studio pipeline CLI: `studio process <url\|file>` produces a complete package. | All 20 test songs are processed, and their stems add up to the original. |
 | A4 | Studio API (§5.3): FastAPI with jobs, library, files and deletion, started with `studio serve`. | The Stage creates a job and downloads the package over Tailscale. |
-| A5 | Stage library: SQLite, resumable downloads with hash checks, and a sync that mirrors the Studio library (adds and removes). | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
+| A5 | Stage library (§5.6): the folder of packages, with no SQLite (it comes with the play history), resumable downloads with hash checks, and `stage sync`, which mirrors the Studio library (adds, updates and removes), plus `stage list`. | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
 | A6 | REAPER bridge: session template (pitch correction in chromatic mode), Lua listener, and the Python `Player` (load, play, stop, mute, transpose, position, end of song). | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
@@ -341,6 +355,13 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 - **Download:** the package (118 MB, 7 stems plus synced lyrics) came down in 19.2 s, one file after the other, and all 7 stem hashes matched the manifest. A stem cut off after its first 1 MB (a `Range` request) and then resumed with `curl -C -` got 206 and the same hash.
 - **Delete:** with a stem being downloaded, `DELETE /songs/{song_id}` answered 409 and the package stayed whole; once the download stopped, 204, the song left `/songs` and its manifest answered 404. No dot folder was left in the library.
 - **Not run live:** the download retries (proven with fakes only, since a YouTube block cannot be caused on purpose) and `DELETE /songs` (it would have deleted the library).
+
+**A5 (2026-11-13): pass.** `studio serve` on the Studio over the 21 package library, `stage sync` on the Stage over Tailscale, from the home network, into an empty Stage library.
+
+- **Interrupted and resumed:** the first sync was killed after 45 s, with 2 songs installed and a third one in its `.partial` folder (25,194,247 bytes). The next sync installed the other 19 and downloaded 1,930,187,676 bytes, exactly the size of those 19 minus what the partial already held, in 401 s (38.5 Mbit/s, the same LAN ceiling as S5). All 147 stem hashes of the Stage library matched their manifests. A third sync found 21 songs unchanged in 0.3 s.
+- **Add, update, remove:** a temporary package (a copy of one song under another id) was added on the next sync (130.1 MB in 35.3 s), and downloaded again as `updated` once its `created_at` changed on the Studio. With that package loaded in REAPER, deleting it on the Studio and syncing reported it `busy` and kept it whole (exit 0); after REAPER loaded another song, the next sync removed it. No dot folder was left on either machine.
+- **No internet:** with the Stage's Wi-Fi off (internet and Studio both unreachable), `stage list` listed the library and a synced song loaded in REAPER with the S3 listener (95 ms round trip) and played: all stems sounded right, with no dropouts.
+- **For A6:** the stem tracks of the session used for the test still had input monitoring on, as S3 noted; the A6 template sets it off.
 
 ### Phase 2: beta
 

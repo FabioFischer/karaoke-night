@@ -3,7 +3,13 @@ name = "stage"
 version = "0.1.0"
 description = "Stage: local server, library, REAPER bridge and session."
 requires-python = ">=3.12"
-dependencies = ["core"]
+dependencies = [
+    "core",
+    "httpx2>=2.16.0",
+]
+
+[project.scripts]
+stage = "stage.cli:main"
 
 [tool.uv.sources]
 core = { workspace = true }

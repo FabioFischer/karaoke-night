@@ -39,4 +39,15 @@ The separation stack (audio-separator, CUDA 13.0 PyTorch, yt-dlp) is an optional
 
 The command prints each step's time and peak VRAM, then the null test (largest error and residual RMS of the stems against the mix). `uv run studio process --help` lists the options.
 
+### Studio API
+
+`studio serve` runs the Studio API (`docs/PLAN.md` §5.3) with the same setup as the pipeline. Every request must send the token from the `STUDIO_TOKEN` environment variable as `Authorization: Bearer <token>`, and the command refuses to start without it. In PowerShell:
+
+```powershell
+$env:STUDIO_TOKEN = "<a long random token>"
+uv run studio serve [--library DIR] [--model-dir DIR] [--host 0.0.0.0] [--port 8790]
+```
+
+`--library` and `--model-dir` work as in `studio process`. Jobs run one at a time and are lost when the server stops; the packages stay in the library. `uv run studio serve --help` lists the options.
+
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

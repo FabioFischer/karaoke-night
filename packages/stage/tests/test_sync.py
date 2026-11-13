@@ -319,6 +319,78 @@ def test_a_busy_song_keeps_its_old_version_on_update(
     assert stem_paths == []
 
 
+def test_an_update_whose_new_version_cannot_move_in_keeps_the_old_one(
+    studio, library: Path, refuse_rename
+) -> None:
+    studio.add(FIRST)
+    run(library, studio)
+    old = package_files(library / FIRST)
+    studio.add(FIRST, created_at=REPROCESSED_AT)
+    partial = library / f".{FIRST}.partial"
+    refuse_rename(partial.name)
+
+    failed = run(library, studio)
+
+    assert failed.outcomes == [
+        Outcome(
+            FIRST,
+            "failed",
+            f"[Errno 5] Access is denied: {str(partial)!r}; the old version stays "
+            "and the new one is installed on a later sync",
+        )
+    ]
+    assert sorted(path.name for path in library.iterdir()) == [partial.name, FIRST]
+    assert package_files(library / FIRST) == old
+    assert package_files(partial) == package_files(studio.library / FIRST)
+    refuse_rename()
+    studio.requests.clear()
+
+    updated = run(library, studio)
+
+    assert updated.outcomes == [Outcome(FIRST, "updated")]
+    assert_mirrors(library, studio, FIRST)
+    stem_paths = [path for path, _ in studio.file_requests() if "/stems/" in path]
+    assert stem_paths == []
+
+
+def test_an_update_that_cannot_put_the_old_version_back_installs_on_a_later_sync(
+    studio, library: Path, monkeypatch
+) -> None:
+    studio.add(FIRST)
+    run(library, studio)
+    studio.add(FIRST, created_at=REPROCESSED_AT)
+    rename = Path.rename
+
+    def refuse_partial_and_trash(self, target):
+        if self.name.startswith(f".{FIRST}."):
+            raise PermissionError(5, "Access is denied", self.name)
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", refuse_partial_and_trash)
+
+    failed = run(library, studio)
+
+    [outcome] = failed.outcomes
+    assert (outcome.song_id, outcome.action) == (FIRST, "failed")
+    assert outcome.reason.startswith(
+        f"[Errno 5] Access is denied: '.{FIRST}.partial'; the old version could "
+        f"not be put back ([Errno 5] Access is denied: '.{FIRST}."
+    )
+    assert outcome.reason.endswith(
+        ".deleting'), so the song is missing until a later sync installs the new one"
+    )
+    names = sorted(path.name for path in library.iterdir())
+    assert names[1] == f".{FIRST}.partial"
+    assert names[0].endswith(".deleting")
+    assert len(names) == 2
+    monkeypatch.undo()
+
+    added = run(library, studio)
+
+    assert added.outcomes == [Outcome(FIRST, "added")]
+    assert_mirrors(library, studio, FIRST)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows locks open files")
 def test_a_song_with_a_really_open_file_is_busy(studio, library: Path) -> None:
     studio.add(FIRST)

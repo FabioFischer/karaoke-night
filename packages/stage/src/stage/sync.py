@@ -136,13 +136,38 @@ def _install(
             partial.rename(target)
             return Outcome(song.id, "added")
         trash = lib.move_to_trash(target)
-        partial.rename(target)
     except lib.Busy:
         return Outcome(song.id, "busy", BUSY_UPDATE)
     except OSError as error:
         return Outcome(song.id, "failed", str(error))
+    try:
+        partial.rename(target)
+    except OSError as error:
+        return _put_back(trash, target, error)
     shutil.rmtree(trash, ignore_errors=True)
     return Outcome(song.id, "updated")
+
+
+def _put_back(trash: Path, target: Path, error: OSError) -> Outcome:
+    """Rename the old version back in place after the new one failed to move in.
+
+    If that fails too, the next sync removes the trash as a leftover and
+    installs the complete partial.
+    """
+    try:
+        trash.rename(target)
+    except OSError as restore_error:
+        return Outcome(
+            target.name,
+            "failed",
+            f"{error}; the old version could not be put back ({restore_error}), "
+            "so the song is missing until a later sync installs the new one",
+        )
+    return Outcome(
+        target.name,
+        "failed",
+        f"{error}; the old version stays and the new one is installed on a later sync",
+    )
 
 
 def _download(

@@ -71,6 +71,8 @@ def test_video_id_from_a_url_or_bare_id(target: str) -> None:
         "https://example.com/watch?v=XXXXXXXXXXX",
         "https://www.youtube.com/watch?list=PLAYLIST",
         "https://www.youtube.com/watch?v=short",
+        "XXXXXXXXXXé",
+        "https://youtu.be/XXXXXXXXXXé",
     ],
 )
 def test_video_id_from_anything_else_is_none(target: str) -> None:

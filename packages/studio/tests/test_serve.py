@@ -5,9 +5,17 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from studio import cli
+from studio.package import build_atomically, song_id
 
 TOKEN = "test-token"
 VIDEO_ID = "XXXXXXXXXXX"
+# The time as logging's default asctime writes it.
+TIME = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}"
+
+
+def log_line(level: str, name: str, message: str) -> re.Pattern:
+    """A whole stderr line with time, level, logger name and message, a regex."""
+    return re.compile(f"^{TIME} {level} {re.escape(name)}: {message}$", re.MULTILINE)
 
 
 class Server:
@@ -203,3 +211,41 @@ def test_serve_starts_on_a_library_that_does_not_exist_yet(
     assert serve(fake_tools, server, "--library", str(tmp_path / "new")) == 0
 
     assert server.started == [("0.0.0.0", 8790)]
+
+
+def test_serve_logs_each_leftover_it_removes_with_level_and_time(
+    fake_tools, token, tmp_path: Path, capsys
+) -> None:
+    library = tmp_path / "library"
+    names = []
+
+    def build(out: Path) -> None:
+        names.append(out.name)
+        raise RuntimeError("stopped mid build")
+
+    with pytest.raises(RuntimeError):
+        build_atomically(library, song_id("Song Title", "Artist Name", VIDEO_ID), build)
+    (library / names[0]).mkdir()
+
+    serve(fake_tools, Server(), "--library", str(library))
+
+    message = re.escape(f"removed the leftover folder {names[0]}")
+    assert log_line("INFO", "studio.library", message).search(capsys.readouterr().err)
+
+
+def test_serve_logs_an_invalid_manifest_with_level_and_time(
+    fake_tools, token, tmp_path: Path, capsys
+) -> None:
+    library = tmp_path / "library"
+    (library / "bad-json").mkdir(parents=True)
+    (library / "bad-json" / "manifest.json").write_bytes(b"{not json")
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+
+    server = Server(lambda client: client.get("/songs", headers=headers).json())
+    serve(fake_tools, server, "--library", str(library))
+
+    assert server.result == []
+    message = re.escape("bad-json is not listed: invalid manifest.json (") + r".+\)"
+    assert log_line("WARNING", "studio.library", message).search(
+        capsys.readouterr().err
+    )

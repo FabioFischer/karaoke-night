@@ -3,6 +3,7 @@
 import argparse
 import http.client
 import importlib.util
+import logging
 import os
 import shutil
 import sys
@@ -205,6 +206,21 @@ def _lacks_extra(command: str, tools: Tools) -> bool:
     return bool(missing)
 
 
+def _log_studio_lines() -> None:
+    """Send the studio.* log lines to stderr with time and level.
+
+    uvicorn configures only its own loggers, and without a handler logging
+    prints warnings bare and drops info lines.
+    """
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logger = logging.getLogger("studio")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
 def serve(args: argparse.Namespace, tools: Tools) -> int:
     token = os.environ.get(TOKEN_VARIABLE)
     if not token:
@@ -217,6 +233,7 @@ def serve(args: argparse.Namespace, tools: Tools) -> int:
     if _lacks_extra("serve", tools):
         return 1
 
+    _log_studio_lines()
     # The worker is a daemon thread, so a stopped server leaves its build behind.
     remove_leftovers(args.library)
     queue = JobQueue(song_builder(args.library, args.model_dir, tools))

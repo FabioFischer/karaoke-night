@@ -515,6 +515,71 @@ def test_invalid_manifests_are_skipped_and_the_rest_keeps_working(
     assert warned >= {newer, "bad-json"}
 
 
+def invalid_manifest_warnings(caplog, folder: str) -> int:
+    return sum(
+        1
+        for r in caplog.records
+        if r.levelname == "WARNING" and r.getMessage().startswith(f"{folder} ")
+    )
+
+
+def test_an_invalid_manifest_is_warned_about_once(
+    client: TestClient, library: Path, caplog
+) -> None:
+    (library / "bad-json").mkdir()
+    (library / "bad-json" / "manifest.json").write_bytes(b"{not json")
+
+    for _ in range(3):
+        assert client.get("/songs").status_code == 200
+    client.get("/songs/bad-json/manifest")
+    client.delete("/songs")
+
+    assert invalid_manifest_warnings(caplog, "bad-json") == 1
+
+
+def test_a_manifest_broken_another_way_is_warned_about_again(
+    client: TestClient, library: Path, caplog
+) -> None:
+    (library / "bad-json").mkdir()
+    manifest = library / "bad-json" / "manifest.json"
+    manifest.write_bytes(b"{not json")
+    client.get("/songs")
+    manifest.write_bytes(b"[]")
+    client.get("/songs")
+    client.get("/songs")
+
+    assert invalid_manifest_warnings(caplog, "bad-json") == 2
+
+
+def test_a_fixed_then_rebroken_manifest_is_warned_about_again(
+    client: TestClient, library: Path, caplog
+) -> None:
+    song = make_package(library, "Song Title", "Artist Name", VIDEO_ID)
+    manifest = library / song / "manifest.json"
+    good = manifest.read_bytes()
+    manifest.write_bytes(b"{not json")
+    client.get("/songs")
+    manifest.write_bytes(good)
+    assert [s["id"] for s in client.get("/songs").json()] == [song]
+    manifest.write_bytes(b"{not json")
+    client.get("/songs")
+
+    assert invalid_manifest_warnings(caplog, song) == 2
+
+
+def test_a_listed_path_that_is_a_folder_on_disk_is_404(
+    client: TestClient, library: Path
+) -> None:
+    package = make_package(library, "Song Title", "Artist Name", VIDEO_ID)
+    (library / package / "stems" / "lead.flac").unlink()
+    (library / package / "stems" / "lead.flac").mkdir()
+
+    response = client.get(f"/songs/{package}/files/stems/lead.flac")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "unknown file"}
+
+
 def test_file_in_the_manifest_but_not_on_disk_is_404(
     client: TestClient, library: Path
 ) -> None:
@@ -574,8 +639,16 @@ def test_concurrent_posts_of_one_video_make_one_job(
 
 @pytest.mark.parametrize(
     "video_id",
-    ["XXXXXXXXXX", "XXXXXXXXXXXX", "XXXXXXXXXX!", "../../x/abc", "", "XXXXXXXXXX\n"],
-    ids=["short", "long", "symbol", "path", "empty", "newline"],
+    [
+        "XXXXXXXXXX",
+        "XXXXXXXXXXXX",
+        "XXXXXXXXXX!",
+        "../../x/abc",
+        "",
+        "XXXXXXXXXX\n",
+        "XXXXXXXXXXé",
+    ],
+    ids=["short", "long", "symbol", "path", "empty", "newline", "accented"],
 )
 def test_malformed_video_id_is_rejected(
     client: TestClient, queue: JobQueue, video_id: str

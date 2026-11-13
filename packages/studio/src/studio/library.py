@@ -5,6 +5,7 @@ listed. Callers reach a package only through scan(), never through a path
 built from outside input.
 """
 
+import hashlib
 import logging
 import re
 import shutil
@@ -17,8 +18,16 @@ from pydantic import ValidationError
 
 log = logging.getLogger(__name__)
 
-# The temporary folder of build_atomically and the trash folder of delete.
-_LEFTOVER = re.compile(r"\..+\.[^.]+\.(tmp|deleting)")
+# .<song_id>.<random>.tmp, the build folder of build_atomically, and
+# .<song_id>.<random>.deleting, the trash folder of delete, where <random> is
+# exactly 8 characters of a-z, 0-9 and _: tempfile.mkdtemp's random names, and
+# the 8 hex digits of a uuid4. Used with fullmatch.
+_LEFTOVER = re.compile(r"\..+\.[a-z0-9_]{8}\.(tmp|deleting)")
+
+# The hash of the invalid manifest.json last warned about, by path, so a broken
+# manifest is warned about once, not on every scan. A manifest that loads again
+# is dropped, so breaking it again warns again.
+_warned: dict[Path, bytes] = {}
 
 
 @dataclass(frozen=True)
@@ -52,15 +61,21 @@ def scan(library: Path) -> dict[str, Package]:
         try:
             manifest = Manifest.model_validate_json(raw)
         except ValidationError as error:
-            first = error.errors(include_url=False)[0]
-            where = ".".join(str(part) for part in first["loc"])
-            reason = f"{where}: {first['msg']}" if where else first["msg"]
-            log.warning(
-                "%s is not listed: invalid manifest.json (%s)", folder.name, reason
-            )
+            digest = hashlib.sha256(raw).digest()
+            if _warned.get(path) != digest:
+                _warned[path] = digest
+                _warn_invalid(folder.name, error)
             continue
+        _warned.pop(path, None)
         packages[manifest.id] = Package(folder, raw, manifest)
     return packages
+
+
+def _warn_invalid(name: str, error: ValidationError) -> None:
+    first = error.errors(include_url=False)[0]
+    where = ".".join(str(part) for part in first["loc"])
+    reason = f"{where}: {first['msg']}" if where else first["msg"]
+    log.warning("%s is not listed: invalid manifest.json (%s)", name, reason)
 
 
 def remove_leftovers(library: Path) -> None:
@@ -72,7 +87,21 @@ def remove_leftovers(library: Path) -> None:
         return
     for folder in library.iterdir():
         if _LEFTOVER.fullmatch(folder.name) and folder.is_dir():
-            shutil.rmtree(folder, ignore_errors=True)
+            _remove_leftover(folder)
+
+
+def _remove_leftover(folder: Path) -> None:
+    errors: list[BaseException] = []
+    shutil.rmtree(folder, onexc=lambda func, path, error: errors.append(error))
+    if errors:
+        log.warning(
+            "could not fully remove the leftover folder %s (%d errors, first: %s)",
+            folder.name,
+            len(errors),
+            errors[0],
+        )
+    else:
+        log.info("removed the leftover folder %s", folder.name)
 
 
 def find_video(library: Path, video_id: str) -> str | None:

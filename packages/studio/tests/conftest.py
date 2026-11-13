@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 
 import numpy as np
@@ -116,6 +117,16 @@ class FakeTools:
             make_runner=self.make_runner,
             lyrics_get=self.lyrics_get,
         )
+
+
+@pytest.fixture(autouse=True)
+def studio_logger():
+    """Undo the logging `studio serve` sets up, whose handler writes to this test's stderr."""
+    logger = logging.getLogger("studio")
+    handlers, level = logger.handlers[:], logger.level
+    yield
+    logger.handlers[:] = handlers
+    logger.setLevel(level)
 
 
 @pytest.fixture

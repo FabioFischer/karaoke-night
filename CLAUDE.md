@@ -50,6 +50,8 @@ uv run studio serve [--library DIR] [--model-dir DIR] [--host 0.0.0.0] [--port 8
 
 `--library` and `--model-dir` work as in `studio process`. Jobs run one at a time and are lost when the server stops; the packages stay in the library. `uv run studio serve --help` lists the options.
 
-On start, `studio serve` removes the `.*.tmp` and `.*.deleting` folders a stopped run left in the library, so never start it while a `studio process` is building into the same library: that build is removed too.
+On start, before it binds the port, `studio serve` removes the folders a stopped run left in the library: builds named `.<song_id>.<random>.tmp` and deletions named `.<song_id>.<random>.deleting`, where `<random>` is exactly 8 characters of `a-z`, `0-9` and `_`. It logs each folder it removes, and each one it could not fully remove. It cannot tell a leftover from a build still running, so never run two `studio serve`, or a `studio serve` and a `studio process`, on the same library at once: the build in flight is removed, even by a second `studio serve` that then fails to start because the port is in use.
+
+The `studio.*` log lines of `studio serve` go to stderr with time and level, next to uvicorn's own lines.
 
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

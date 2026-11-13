@@ -148,20 +148,21 @@ FastAPI, started with `studio serve` (`--host` defaults to `0.0.0.0`, `--port` t
 
 | Method | Route | Description |
 |---|---|---|
-| `POST` | `/jobs` | Takes `{source: {type: "youtube_music", video_id}, title, artist, album?, duration_s?}` and returns `{job_id, song_id}`. Only YouTube Music sources are accepted; local files stay with `studio process`. `song_id` comes from the given title and artist plus the `video_id`, as the CLI computes it, and the Studio fetches no metadata of its own. Without `duration_s`, the lyrics lookup uses the audio length. |
+| `POST` | `/jobs` | Takes `{source: {type: "youtube_music", video_id}, title, artist, album?, duration_s?}` and returns `{job_id, song_id}`. Only YouTube Music sources are accepted; local files stay with `studio process`. The `video_id` must be 11 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, the rule `studio process` uses, or the request gets 422 at once; packages already in the library are not checked. `song_id` comes from the given title and artist plus the `video_id`, as the CLI computes it, and the Studio fetches no metadata of its own. Without `duration_s`, the lyrics lookup uses the audio length. |
 | `GET` | `/jobs/{job_id}` | `{job_id, song_id, status, step, attempt, retry_at, error}`. 404 for an unknown job. |
 | `GET` | `/songs` | Master library listing, one `{id, title, artist, duration_s, pipeline_version, created_at}` per package. The Stage mirrors it: it downloads what is missing and removes what is no longer listed. |
 | `GET` | `/songs/{song_id}/manifest` | The `manifest.json` bytes as stored on disk, not written back through the model (which would drop unknown fields, §5.2). |
-| `GET` | `/songs/{song_id}/files/{path}` | A file the manifest lists (a stem or the lyrics); any other path is 404. Supports `Range`, so downloads can resume. |
+| `GET` | `/songs/{song_id}/files/{path}` | A file the manifest lists (a stem or the lyrics); any other path, or a listed file missing on disk, is 404. Supports `Range`, so downloads can resume. |
 | `DELETE` | `/songs/{song_id}` | Deletes a song from the master library: 204, or 404 for an unknown song. The Stage removes it on the next sync. |
 | `DELETE` | `/songs` | Deletes the whole master library and returns `{deleted: [...], busy: [...]}`. |
 
 - **Statuses:** `queued → downloading → separating → lyrics → packaging → done`, or `failed`. `step` is set only while `separating`: `vocals`, `karaoke` or `instruments`. `attempt` counts the runs started so far (0 while a new job waits its turn).
 - **Queue:** in memory, one job at a time, since the GPU takes one song at a time. Jobs are lost when the Studio restarts; the library stays the source of truth.
-- **Retries:** only a failure while downloading is tried again, up to 3 times, after 2, 10 and 30 minutes. While it waits, the job is `queued` with `retry_at` set and `error` holding the last error, and the jobs behind it run in the meantime. After the last retry fails, or after a failure in any later stage, the job is `failed`.
+- **Retries:** only a failure while downloading is tried again, up to 3 times, after 2, 10 and 30 minutes. While it waits, the job is `queued` with `retry_at` set and `error` holding the last error, until the next attempt starts and clears both, and the jobs behind it run in the meantime. After the last retry fails, or after a failure in any later stage, the job is `failed`.
 - **One job per video:** if a package from the same `video_id` is already in the library, `POST /jobs` returns a job that is already `done`, with that package's id, whatever title it was given. If a job for that `video_id` is queued, waiting for a retry or running, it returns that job. A failed job does not count.
-- **Only library ids:** routes that take a `song_id` act only on the ids of the library listing, never on a path built from the URL, so nothing outside the library can be reached. Folders starting with `.` (builds and deletions in flight) and folders without a `manifest.json` are not listed.
+- **Only library ids:** routes that take a `song_id` act only on the ids of the library listing, never on a path built from the URL, so nothing outside the library can be reached. Folders starting with `.` (builds and deletions in flight), folders without a `manifest.json` and folders whose `manifest.json` the model rejects (logged as a warning) are not listed, so one broken package does not take the rest of the library down.
 - **Deleting:** the package folder is first renamed to a name starting with `.`, then removed. On Windows a folder holding an open file cannot be renamed, so `DELETE /songs/{song_id}` answers 409 and the package stays whole; `DELETE /songs` lists it under `busy`.
+- **Leftovers:** a server stopped mid job leaves its build folder (`.<song_id>.<random>.tmp`), and a removal that could not finish leaves its trash folder (`.<song_id>.<random>.deleting`). `studio serve` removes the folders of those two shapes from the library when it starts, before serving; nothing else is touched.
 
 ### 5.4 Stage ↔ REAPER
 

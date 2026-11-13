@@ -7,9 +7,8 @@
 *Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6) built and tested locally against the real Studio app.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1).
 - **Next:**
-  - the A5 live run: `studio serve` on the Studio and `stage sync` on the Stage over Tailscale, including a sync interrupted and resumed, and REAPER holding a song's files open;
   - milestone A6 (REAPER bridge);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
@@ -356,6 +355,13 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 - **Download:** the package (118 MB, 7 stems plus synced lyrics) came down in 19.2 s, one file after the other, and all 7 stem hashes matched the manifest. A stem cut off after its first 1 MB (a `Range` request) and then resumed with `curl -C -` got 206 and the same hash.
 - **Delete:** with a stem being downloaded, `DELETE /songs/{song_id}` answered 409 and the package stayed whole; once the download stopped, 204, the song left `/songs` and its manifest answered 404. No dot folder was left in the library.
 - **Not run live:** the download retries (proven with fakes only, since a YouTube block cannot be caused on purpose) and `DELETE /songs` (it would have deleted the library).
+
+**A5 (2026-11-13): pass.** `studio serve` on the Studio over the 21 package library, `stage sync` on the Stage over Tailscale, from the home network, into an empty Stage library.
+
+- **Interrupted and resumed:** the first sync was killed after 45 s, with 2 songs installed and a third one in its `.partial` folder (25,194,247 bytes). The next sync installed the other 19 and downloaded 1,930,187,676 bytes, exactly the size of those 19 minus what the partial already held, in 401 s (38.5 Mbit/s, the same LAN ceiling as S5). All 147 stem hashes of the Stage library matched their manifests. A third sync found 21 songs unchanged in 0.3 s.
+- **Add, update, remove:** a temporary package (a copy of one song under another id) was added on the next sync (130.1 MB in 35.3 s), and downloaded again as `updated` once its `created_at` changed on the Studio. With that package loaded in REAPER, deleting it on the Studio and syncing reported it `busy` and kept it whole (exit 0); after REAPER loaded another song, the next sync removed it. No dot folder was left on either machine.
+- **No internet:** with the Stage's Wi-Fi off (internet and Studio both unreachable), `stage list` listed the library and a synced song loaded in REAPER with the S3 listener (95 ms round trip) and played: all stems sounded right, with no dropouts.
+- **For A6:** the stem tracks of the session used for the test still had input monitoring on, as S3 noted; the A6 template sets it off.
 
 ### Phase 2: beta
 

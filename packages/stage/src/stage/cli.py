@@ -55,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None, http: httpx2.Client | None = None) -> int:
     """http replaces the client a sync makes of its own, for tests."""
+    # Redirected on Windows, both default to the ANSI code page, which cannot
+    # encode most song titles.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter("warning: %(message)s"))

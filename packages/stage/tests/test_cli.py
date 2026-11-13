@@ -1,5 +1,7 @@
+import io
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import httpx2
@@ -89,6 +91,24 @@ def test_sync_reports_busy_and_failed_songs_and_exits_1_on_a_failure(
     assert SUMMARY.match(lines[2]).groups()[:7] == ("0", "0", "0", "1", "1", "0", "0")
 
 
+def test_sync_with_only_busy_songs_exits_0(
+    studio, library: Path, token, capsys, refuse_rename
+) -> None:
+    studio.add(FIRST)
+    stage_sync(studio, library)
+    capsys.readouterr()
+    shutil.rmtree(studio.library / FIRST)
+    refuse_rename(FIRST)
+
+    assert stage_sync(studio, library) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == (
+        f"busy    {FIRST}: a file of the song is open; it stays until a later sync"
+    )
+    assert SUMMARY.match(lines[1]).groups()[:7] == ("0", "0", "0", "1", "0", "0", "0")
+
+
 def test_sync_lines_are_aligned(studio, library: Path, token, capsys) -> None:
     studio.add(FIRST)
 
@@ -167,6 +187,52 @@ def test_list_works_without_the_network_or_the_token(
         f"{FIRST}  Title of {FIRST}  Artist Name  4:05",
         f"{SECOND}  Title of {SECOND}  Artist Name  4:05",
     ]
+
+
+NOT_IN_CP1252 = "歌の題名"
+
+
+def cp1252(monkeypatch, name: str) -> io.TextIOWrapper:
+    """Replace sys.<name> with a stream encoded like a redirected one on Windows."""
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, name, stream)
+    return stream
+
+
+def written(stream: io.TextIOWrapper) -> list[str]:
+    stream.flush()
+    return stream.buffer.getvalue().decode("utf-8").splitlines()
+
+
+def test_list_prints_a_title_outside_cp1252_as_utf8(
+    studio, library: Path, token, monkeypatch
+) -> None:
+    studio.add(FIRST, extra={"title": NOT_IN_CP1252})
+    stage_sync(studio, library)
+    stdout = cp1252(monkeypatch, "stdout")
+
+    assert cli.main(["list", "--library", str(library)]) == 0
+
+    assert written(stdout) == [f"{FIRST}  {NOT_IN_CP1252}  Artist Name  4:05"]
+
+
+def test_sync_warnings_outside_cp1252_are_written_as_utf8(
+    studio, library: Path, token, monkeypatch
+) -> None:
+    bad_id = f"{NOT_IN_CP1252}--artist--a1b2c3"
+    studio.add(bad_id, folder="bad-package")
+    stdout = cp1252(monkeypatch, "stdout")
+    stderr = cp1252(monkeypatch, "stderr")
+
+    assert stage_sync(studio, library) == 0
+
+    assert written(stderr) == [
+        (
+            "warning: skipped a song the Studio lists under an id the Stage does "
+            f"not accept: {bad_id!r}"
+        )
+    ]
+    assert SUMMARY.match(written(stdout)[0]) is not None
 
 
 def test_list_of_an_empty_library(tmp_path: Path, capsys) -> None:

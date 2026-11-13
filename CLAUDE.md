@@ -54,4 +54,16 @@ On start, before it binds the port, `studio serve` removes the folders a stopped
 
 The `studio.*` log lines of `studio serve` go to stderr with time and level, next to uvicorn's own lines.
 
+### Stage library
+
+The Stage needs neither the separation extra nor the Studio stack: on the Stage machine, `uv sync --package stage` is enough. The library is the folder of packages (`docs/PLAN.md` §5.6), `library/` in the current folder by default, as for `studio`.
+
+```powershell
+$env:STUDIO_TOKEN = "<the token studio serve was started with>"
+uv run stage sync --studio http://<studio address>:8790 [--library DIR]
+uv run stage list [--library DIR]
+```
+
+`stage sync` mirrors the Studio library: it downloads what is missing or reprocessed, resumes interrupted downloads from `.<song_id>.partial` folders, checks each stem's sha256, and removes what the Studio no longer lists. It refuses to run without `STUDIO_TOKEN`. It prints one line per song acted on (`added`, `updated`, `removed`, `busy`, `failed`) and a summary line, and exits with 1 if the Studio cannot be reached (nothing changes then) or any song failed. A song whose files are open (REAPER holding the loaded song) is reported `busy` and left whole. `stage list` needs no network and no token.
+
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

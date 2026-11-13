@@ -87,7 +87,7 @@ def create_app(library: Path, token: str, queue: JobQueue) -> FastAPI:
     @app.get("/songs/{song}/files/{path:path}")
     def get_file(song: str, path: str) -> FileResponse:
         package = package_of(song)
-        if path not in package.files():
+        if path not in package.files() or not (package.folder / path).is_file():
             raise HTTPException(404, "unknown file")
         return FileResponse(package.folder / path)
 

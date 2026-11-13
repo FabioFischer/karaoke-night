@@ -261,3 +261,47 @@ def wait_for(condition, timeout: float = 5.0) -> bool:
         return condition()
     finally:
         timer.cancel()
+
+
+def test_worker_thread_runs_a_retry_when_its_time_comes_without_a_wake() -> None:
+    finished = threading.Event()
+    builds = Builds(AAAAAAAAAAA=[forbidden()])
+
+    def build(request, on_stage):
+        builds(request, on_stage)
+        finished.set()
+
+    queue = JobQueue(build, delays=(timedelta(milliseconds=50),))
+    queue.start()
+    try:
+        job = queue.submit(request("AAAAAAAAAAA"), "song-a")
+
+        assert finished.wait(timeout=5)
+        assert wait_for(lambda: queue.get(job.job_id).status == "done")
+        assert builds.runs == ["AAAAAAAAAAA", "AAAAAAAAAAA"]
+    finally:
+        queue.stop()
+
+
+def test_next_attempt_clears_the_previous_error() -> None:
+    clock = Clock()
+    seen: list[tuple] = []
+    queue: JobQueue
+    builds = Builds(AAAAAAAAAAA=[forbidden()])
+
+    def build(request, on_stage):
+        def watching(status, step=None):
+            on_stage(status, step)
+            if status == "downloading":
+                job = queue.get(job_id)
+                seen.append((job.attempt, job.status, job.error, job.retry_at))
+
+        builds(request, watching)
+
+    queue = JobQueue(build, clock=clock)
+    job_id = queue.submit(request("AAAAAAAAAAA"), "song-a").job_id
+    queue.run_ready()
+    clock.advance(RETRY_DELAYS[0])
+    queue.run_ready()
+
+    assert seen == [(1, "downloading", None, None), (2, "downloading", None, None)]

@@ -165,3 +165,41 @@ def test_serve_help_lists_only_the_planned_options(capsys) -> None:
 
     options = set(re.findall(r"--[a-z-]+", capsys.readouterr().out))
     assert options == {"--help", "--library", "--model-dir", "--host", "--port"}
+
+
+def test_serve_removes_leftover_builds_and_deletions_before_serving(
+    fake_tools, token, tmp_path: Path
+) -> None:
+    library = tmp_path / "library"
+    leftovers = [
+        ".song-title--artist-name--a1b2c3.k3j_2h1q.tmp",
+        ".song-title--artist-name--d4e5f6.0a1b2c3d.deleting",
+    ]
+    kept = [
+        "song-title--artist-name--a1b2c3",
+        ".tmp",
+        ".deleting",
+        ".settings.tmp",
+        "plain.name.tmp",
+        ".keep",
+    ]
+    for name in leftovers + kept:
+        (library / name).mkdir(parents=True)
+        (library / name / "manifest.json").write_text("{}")
+    (library / ".notes.abc.tmp").write_text("a file, not a folder")
+    kept.append(".notes.abc.tmp")
+
+    server = Server(lambda client: sorted(p.name for p in library.iterdir()))
+    serve(fake_tools, server, "--library", str(library))
+
+    assert server.result == sorted(kept)
+
+
+def test_serve_starts_on_a_library_that_does_not_exist_yet(
+    fake_tools, token, tmp_path: Path
+) -> None:
+    server = Server()
+
+    assert serve(fake_tools, server, "--library", str(tmp_path / "new")) == 0
+
+    assert server.started == [("0.0.0.0", 8790)]

@@ -118,3 +118,26 @@ def test_job_created_song_summary_and_delete_result_shapes() -> None:
         "deleted": ["a"],
         "busy": ["b"],
     }
+
+
+@pytest.mark.parametrize(
+    "video_id",
+    ["XXXXXXXXXX", "XXXXXXXXXXXX", "XXXXXXXXXX!", "XXXXXXXXXX\n", ""],
+    ids=["short", "long", "symbol", "newline", "empty"],
+)
+def test_job_request_rejects_a_malformed_video_id(video_id: str) -> None:
+    with pytest.raises(ValidationError):
+        JobRequest.model_validate(
+            {
+                "source": {"type": "youtube_music", "video_id": video_id},
+                "title": "Song Title",
+                "artist": "Artist Name",
+            }
+        )
+
+
+def test_manifest_source_keeps_any_video_id() -> None:
+    """Packages already on disk must keep loading: only new requests are checked."""
+    assert YouTubeMusicSource(type="youtube_music", video_id="not an id").video_id == (
+        "not an id"
+    )

@@ -5,12 +5,20 @@ listed. Callers reach a package only through scan(), never through a path
 built from outside input.
 """
 
+import logging
+import re
 import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.manifest import Manifest
+from pydantic import ValidationError
+
+log = logging.getLogger(__name__)
+
+# The temporary folder of build_atomically and the trash folder of delete.
+_LEFTOVER = re.compile(r"\..+\.[^.]+\.(tmp|deleting)")
 
 
 @dataclass(frozen=True)
@@ -41,9 +49,30 @@ def scan(library: Path) -> dict[str, Package]:
         if folder.name.startswith(".") or not path.is_file():
             continue
         raw = path.read_bytes()
-        manifest = Manifest.model_validate_json(raw)
+        try:
+            manifest = Manifest.model_validate_json(raw)
+        except ValidationError as error:
+            first = error.errors(include_url=False)[0]
+            where = ".".join(str(part) for part in first["loc"])
+            reason = f"{where}: {first['msg']}" if where else first["msg"]
+            log.warning(
+                "%s is not listed: invalid manifest.json (%s)", folder.name, reason
+            )
+            continue
         packages[manifest.id] = Package(folder, raw, manifest)
     return packages
+
+
+def remove_leftovers(library: Path) -> None:
+    """Remove the builds and deletions a stopped process left in library.
+
+    This also removes the build of a `studio process` running on library now.
+    """
+    if not library.is_dir():
+        return
+    for folder in library.iterdir():
+        if _LEFTOVER.fullmatch(folder.name) and folder.is_dir():
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def find_video(library: Path, video_id: str) -> str | None:

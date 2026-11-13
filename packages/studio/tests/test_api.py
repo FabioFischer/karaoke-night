@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from core.manifest import Manifest
 from fastapi.testclient import TestClient
 from studio import cli
+from studio import library as lib
 from studio.api import create_app
 from studio.jobs import JobQueue
 from studio.package import song_id
@@ -484,3 +486,107 @@ def test_delete_all_reports_deleted_and_busy(
 
 def test_delete_all_of_an_empty_library(client: TestClient) -> None:
     assert client.delete("/songs").json() == {"deleted": [], "busy": []}
+
+
+def test_invalid_manifests_are_skipped_and_the_rest_keeps_working(
+    client: TestClient, queue: JobQueue, library: Path, caplog
+) -> None:
+    good = make_package(library, "Song Title", "Artist Name", VIDEO_ID)
+    newer = make_package(
+        library, "Newer Title", "Artist Name", OTHER_ID, extra={"schema": 2}
+    )
+    (library / "bad-json").mkdir()
+    (library / "bad-json" / "manifest.json").write_bytes(b"{not json")
+
+    songs = client.get("/songs")
+    lead = client.get(f"/songs/{good}/files/stems/lead.flac")
+    job = client.post("/jobs", json=job_body(video_id="ZZZZZZZZZZZ"))
+    deleted = client.delete("/songs")
+
+    assert songs.status_code == 200
+    assert [song["id"] for song in songs.json()] == [good]
+    assert lead.status_code == 200
+    assert job.status_code == 200
+    assert queue.run_ready() is True
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == [good]
+    assert {p.name for p in library.iterdir()} >= {newer, "bad-json"}
+    warned = {r.getMessage().split(" ")[0] for r in caplog.records}
+    assert warned >= {newer, "bad-json"}
+
+
+def test_file_in_the_manifest_but_not_on_disk_is_404(
+    client: TestClient, library: Path
+) -> None:
+    package = make_package(library, "Song Title", "Artist Name", VIDEO_ID)
+    (library / package / "stems" / "lead.flac").unlink()
+
+    response = client.get(f"/songs/{package}/files/stems/lead.flac")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "unknown file"}
+
+
+def test_a_trash_folder_left_behind_is_not_listed(
+    client: TestClient, library: Path, monkeypatch
+) -> None:
+    song = make_package(library, "Song Title", "Artist Name", VIDEO_ID)
+    monkeypatch.setattr("studio.library.shutil.rmtree", lambda *a, **k: None)
+
+    assert client.delete(f"/songs/{song}").status_code == 204
+
+    assert len(list(library.iterdir())) == 1
+    assert client.get("/songs").json() == []
+    assert client.get(f"/songs/{song}/manifest").status_code == 404
+
+
+def test_concurrent_posts_of_one_video_make_one_job(
+    client: TestClient, queue: JobQueue, monkeypatch
+) -> None:
+    """Each request waits inside the dedup for the other; only the lock keeps them apart."""
+    both_inside = threading.Barrier(2, timeout=1)
+    find_video = lib.find_video
+
+    def find_video_together(library, video_id):
+        try:
+            both_inside.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return find_video(library, video_id)
+
+    monkeypatch.setattr(lib, "find_video", find_video_together)
+    responses = []
+
+    def post() -> None:
+        responses.append(client.post("/jobs", json=job_body()).json())
+
+    threads = [threading.Thread(target=post) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(responses) == 2
+    assert responses[0] == responses[1]
+    assert queue.run_ready() is True
+    assert queue.run_ready() is False
+
+
+@pytest.mark.parametrize(
+    "video_id",
+    ["XXXXXXXXXX", "XXXXXXXXXXXX", "XXXXXXXXXX!", "../../x/abc", "", "XXXXXXXXXX\n"],
+    ids=["short", "long", "symbol", "path", "empty", "newline"],
+)
+def test_malformed_video_id_is_rejected(
+    client: TestClient, queue: JobQueue, video_id: str
+) -> None:
+    response = client.post("/jobs", json=job_body(video_id=video_id))
+
+    assert response.status_code == 422
+    assert queue.run_ready() is False
+
+
+def test_video_id_of_every_allowed_character_is_accepted(client: TestClient) -> None:
+    assert (
+        client.post("/jobs", json=job_body(video_id="aZ09_-aZ09_")).status_code == 200
+    )

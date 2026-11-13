@@ -21,6 +21,7 @@ from studio.api import create_app
 from studio.audio import SAMPLE_RATE, fit_headroom, null_test
 from studio.download import source_metadata, video_id_from
 from studio.jobs import Build, JobQueue
+from studio.library import remove_leftovers
 from studio.lyrics import PAUSE_S, LrclibError, Paced, lookup, lrclib_get
 from studio.package import (
     build_atomically,
@@ -216,6 +217,8 @@ def serve(args: argparse.Namespace, tools: Tools) -> int:
     if _lacks_extra("serve", tools):
         return 1
 
+    # The worker is a daemon thread, so a stopped server leaves its build behind.
+    remove_leftovers(args.library)
     queue = JobQueue(song_builder(args.library, args.model_dir, tools))
     queue.start()
     try:

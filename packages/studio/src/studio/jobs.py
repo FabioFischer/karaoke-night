@@ -118,7 +118,7 @@ class JobQueue:
             job = self._jobs[job_id]
             if job.retry_at is None or job.retry_at <= now:
                 self._pending.remove(job_id)
-                job.retry_at = None
+                job.retry_at, job.error = None, None
                 job.attempt += 1
                 return job_id
         return None

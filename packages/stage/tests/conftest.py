@@ -155,11 +155,14 @@ _CMD = "SET/EXTSTATE/karaoke/cmd/"
 _ACK = "GET/EXTSTATE/karaoke/ack"
 _TRACK_FIELDS = "1.000000\t0.000000\t-1500\t-1500\t1.000000\t0\t0\t0\t1\t0"
 PLAYING, STOPPED = 1, 0
+# Far more reads than any test needs: a follow loop that never sees the end
+# fails here instead of hanging the suite.
+MAX_TRANSPORT_READS = 1_000
 
 
 def wire(value: str) -> str:
     """value as GET/EXTSTATE sends it: newline, tab and backslash escaped."""
-    return value.replace("\\", "\\\\").replace("\n", "\n").replace("\t", "\t")
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
 
 
 class FakeReaper:
@@ -171,7 +174,7 @@ class FakeReaper:
     that command see, in order; the last one repeats. transport is the list of
     (playstate, position) the TRANSPORT reads return, in order; the last one
     repeats. on_transport, when set, runs before each TRANSPORT reply with the
-    number of reads so far.
+    number of reads so far. A read past MAX_TRANSPORT_READS fails the test.
     """
 
     def __init__(self, tracks: tuple[str, ...] = TEMPLATE_TRACKS) -> None:
@@ -209,6 +212,10 @@ class FakeReaper:
             )
         if command == "TRANSPORT":
             self.transport_reads += 1
+            if self.transport_reads > MAX_TRANSPORT_READS:
+                raise AssertionError(
+                    f"TRANSPORT read {self.transport_reads} times: the song never ends"
+                )
             if self.on_transport is not None:
                 self.on_transport(self.transport_reads)
             state, position = self.transport[

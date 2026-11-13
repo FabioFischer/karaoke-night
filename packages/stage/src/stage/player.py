@@ -25,7 +25,7 @@ _SECTION = "karaoke"
 _PLAY, _STOP, _GO_TO_START = "1007", "1016", "40042"
 # TRANSPORT playstate: 0 stopped, 1 playing, 2 paused, 5 recording, 6 record
 # paused.
-_PLAYING_STATES = frozenset({1, 5})
+_STOPPED = 0
 _ESCAPES = {"n": "\n", "t": "\t", "\\": "\\"}
 _HTTP_TIMEOUT = httpx2.Timeout(2.0)
 _UNREACHABLE = (httpx2.HTTPError, httpx2.InvalidURL)
@@ -35,7 +35,8 @@ _UNREACHABLE = (httpx2.HTTPError, httpx2.InvalidURL)
 class Player(Protocol):
     """What the Stage needs from a player. Stems are named as in the manifest."""
 
-    def load(self, manifest: Path) -> None: ...
+    def load(self, manifest: Path) -> None:
+        """Stop playback, then replace the loaded song."""
 
     def play(self) -> None:
         """Play the loaded song from its start."""
@@ -69,19 +70,18 @@ class Transport:
     position_s: float
 
     @property
-    def playing(self) -> bool:
-        return self.playstate in _PLAYING_STATES
+    def stopped(self) -> bool:
+        return self.playstate == _STOPPED
 
 
 def song_ended(before: Transport, now: Transport, *, stop_requested: bool) -> bool:
-    """The end of song rule: playback went from playing to not playing without
-    the Stage asking to stop.
+    """The end of song rule: playback stopped without the Stage asking to stop.
 
     Not yet confirmed against a live REAPER, which stops at the end of the
-    project when "Stop/repeat playback at end of project" is on. A pause or a
-    stop made by hand in REAPER also counts as the end.
+    project when "Stop/repeat playback at end of project" is on. A stop made by
+    hand in REAPER, paused or not, also counts as the end; a pause does not.
     """
-    return before.playing and not now.playing and not stop_requested
+    return not before.stopped and now.stopped and not stop_requested
 
 
 def unescape(value: str) -> str:
@@ -184,6 +184,9 @@ class ReaperPlayer:
         self._tracks = parse_tracks(self._request("TRACK"))
 
     def load(self, manifest: Path) -> None:
+        # Stems loaded under a moving cursor would play at once, with the
+        # previous song's mutes and key.
+        self.stop()
         self._command("load", manifest=str(manifest))
         # The listener creates the stem tracks the project lacks.
         self.connect()

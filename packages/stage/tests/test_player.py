@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -26,6 +27,7 @@ TRACK_REPLY = (
     "TRACK\t3\tdrums\t0\t1.000000\t0.000000\t-1500\t-1500\t1.000000\t0\t0\t0\t1\t0\n"
 )
 PLAYING, PAUSED, STOPPED = 1, 2, 0
+RECORD_PAUSED = 6
 MANIFEST = Path("C:/Songs/a;b/song a/manifest.json")
 
 
@@ -82,11 +84,11 @@ def test_parse_transport_without_a_transport_line_is_none() -> None:
 
 
 @pytest.mark.parametrize(
-    ("playstate", "playing"),
-    [(0, False), (1, True), (2, False), (5, True), (6, False)],
+    ("playstate", "stopped"),
+    [(0, True), (1, False), (2, False), (5, False), (6, False)],
 )
-def test_transport_is_playing_while_playing_or_recording(playstate, playing) -> None:
-    assert Transport(playstate, 0.0).playing is playing
+def test_transport_is_stopped_only_on_playstate_0(playstate, stopped) -> None:
+    assert Transport(playstate, 0.0).stopped is stopped
 
 
 def test_unescape_decodes_newline_tab_and_backslash() -> None:
@@ -181,9 +183,22 @@ def test_song_not_ended_before_playback_started() -> None:
     )
 
 
-def test_song_ended_on_a_pause_from_reaper() -> None:
+@pytest.mark.parametrize("paused", [PAUSED, RECORD_PAUSED])
+def test_song_not_ended_on_a_pause_from_reaper(paused) -> None:
+    assert not song_ended(
+        Transport(PLAYING, 30.0), Transport(paused, 30.0), stop_requested=False
+    )
+
+
+def test_song_not_ended_when_a_pause_resumes() -> None:
+    assert not song_ended(
+        Transport(PAUSED, 30.0), Transport(PLAYING, 30.1), stop_requested=False
+    )
+
+
+def test_song_ended_on_a_stop_by_hand_during_a_pause() -> None:
     assert song_ended(
-        Transport(PLAYING, 30.0), Transport(PAUSED, 30.0), stop_requested=False
+        Transport(PAUSED, 30.0), Transport(STOPPED, 30.0), stop_requested=False
     )
 
 
@@ -220,6 +235,14 @@ def test_set_mute_of_a_missing_track_names_the_tracks(reaper) -> None:
     assert str(error.value) == (
         "REAPER has no track named 'drums'; its tracks are: Mic 1, Lead"
     )
+
+
+def test_load_stops_playback_before_the_listener_loads(reaper) -> None:
+    player = connected(reaper)
+
+    player.load(MANIFEST)
+
+    assert reaper.ops() == ["1016", "load"]
 
 
 def test_load_sends_the_manifest_path_and_reads_the_tracks_again(reaper) -> None:
@@ -266,6 +289,23 @@ def test_a_stale_ack_and_empty_polls_are_skipped(reaper) -> None:
 
     polls = [c for c in reaper.commands if c == "GET/EXTSTATE/karaoke/ack"]
     assert len(polls) == 3
+
+
+def test_a_new_player_skips_the_ack_an_earlier_run_left(reaper, monkeypatch) -> None:
+    earlier = connected(reaper)
+    earlier.ping()
+    (left,) = reaper.sent
+    # The earlier run's ack stays in the slot until the listener answers.
+    stale = ack_of(left, ok=False, error="left by an earlier run")
+    reaper.acks = lambda command: [stale, stale, ack_of(command, ok=True)]
+    started = time.time()
+    monkeypatch.setattr(time, "time", lambda: started + 60.0)
+    player = connected(reaper)
+
+    player.ping()
+
+    polls = [c for c in reaper.commands if c == "GET/EXTSTATE/karaoke/ack"]
+    assert len(polls) == 1 + 3
 
 
 def test_no_ack_with_the_right_id_is_a_timeout_that_says_to_restart(reaper) -> None:
@@ -363,6 +403,39 @@ def test_play_again_clears_the_end(reaper) -> None:
     player.position()
     player.position()
     assert player.ended()
+
+    player.play()
+    player.position()
+
+    assert not player.ended()
+
+
+def test_a_pause_and_its_resume_keep_the_song_going(reaper) -> None:
+    reaper.transport = [
+        (PLAYING, 0.0),
+        (PAUSED, 1.0),
+        (PAUSED, 1.0),
+        (PLAYING, 1.2),
+        (STOPPED, 2.0),
+    ]
+    player = connected(reaper)
+    player.play()
+
+    seen = []
+    for _ in range(5):
+        player.position()
+        seen.append(player.ended())
+
+    assert seen == [False, False, False, False, True]
+
+
+def test_play_again_forgets_the_transport_of_the_previous_song(reaper) -> None:
+    # REAPER can still show the stop for a moment after 1007.
+    reaper.transport = [(PLAYING, 10.0), (STOPPED, 0.0), (PLAYING, 0.1)]
+    player = connected(reaper)
+    player.play()
+    player.position()
+    player.stop()
 
     player.play()
     player.position()

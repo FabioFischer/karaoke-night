@@ -7,7 +7,7 @@ from stage import cli
 
 SONG = "song-title--artist-name--a1b2c3"
 STEMS = ("lead", "backing", "drums", "bass", "guitar", "piano", "other")
-PLAYING, STOPPED = 1, 0
+PLAYING, PAUSED, STOPPED = 1, 2, 0
 
 
 @pytest.fixture
@@ -75,6 +75,7 @@ def test_play_loads_mutes_transposes_then_plays_and_exits_0_at_the_end(
     assert transpose["semitones"] == -2
     # Template order: Mic 1, Mic 2, then the stems from index 3.
     assert reaper.ops() == [
+        "1016",
         "load",
         "SET/TRACK/3/MUTE/1",
         "SET/TRACK/4/MUTE/1",
@@ -108,6 +109,29 @@ def test_play_unmutes_every_stem_and_sends_transpose_0_by_default(
     assert [reaper.muted[index] for index in range(3, 10)] == [False] * 7
     assert [command["op"] for command in reaper.sent] == ["load", "transpose"]
     assert reaper.sent[1]["semitones"] == 0
+
+
+def test_a_pause_in_reaper_keeps_following_until_the_song_ends(
+    reaper, song: Path, capsys
+) -> None:
+    reaper.transport = [
+        (PLAYING, 0.0),
+        (PLAYING, 1.1),
+        (PAUSED, 1.2),
+        (PAUSED, 1.2),
+        (PLAYING, 2.1),
+        (STOPPED, 3.4),
+    ]
+
+    assert stage_play(reaper, song) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "playing Song Title by Artist Name (0:03)",
+        "0:00 / 0:03",
+        "0:01 / 0:03",
+        "0:02 / 0:03",
+        "the song ended",
+    ]
 
 
 def test_ctrl_c_stops_playback_and_exits_130(reaper, song: Path, capsys) -> None:

@@ -289,7 +289,7 @@ A refusal answers `{error, detail}`: `error` is a stable code the screens put in
 
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/api/state` | `{session, playlist}`, which the screens poll about every 250 ms. `session` is `{state, entry_id, muted, key, position_s, duration_s, error, detail}`: `entry_id` is the first entry in setup and the song played afterwards, `duration_s` that entry's duration (the manifest's once it plays), `position_s` null in setup. `playlist` holds the entries in order. |
+| `GET` | `/api/state` | `{session, playlist}`, which the screens poll about every 250 ms. `session` is `{state, entry_id, muted, key, position_s, duration_s, error, detail, stems}`: `entry_id` is the first entry in setup and the song played afterwards, `duration_s` that entry's duration (the manifest's once it plays), `position_s` null in setup, `stems` the stem names of that entry's manifest in its order (what the setup offers to mute), empty while its package is not in the library. `playlist` holds the entries in order. |
 | `GET` | `/api/search?q=<text>` | `stage search` (§5.1): `{results, notice, detail}`, each result `{title, artist, origin, video_id, album, duration_s, thumbnail_url, song_id}`. `notice` is `offline` when the online search failed, with the English notice in `detail`. |
 | `GET` | `/api/library` | `{songs}`: every song of the library, as a search result. |
 | `GET` | `/api/library/{song_id}/lyrics` | `{status, lines}`, `status` being `synced`, `unsynced` or `none`, each line `{time_s, text}` (`time_s` null for unsynced lyrics). 404 `unknown_song`. |

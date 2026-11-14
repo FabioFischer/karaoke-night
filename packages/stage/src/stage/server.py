@@ -111,10 +111,22 @@ def create_app(
     def session_refused(request: Request, error: SessionError) -> Response:
         return refusal(error.code, error.detail)
 
+    def stems(entry_id: str | None) -> list[str]:
+        """The stems of the entry's package, none while it is not in the library."""
+        entry = None if entry_id is None else playlist.get(entry_id)
+        if entry is None or entry.song.song_id is None:
+            return []
+        song = lib.scan(library).get(entry.song.song_id)
+        return [] if song is None else list(song.manifest.stems)
+
     def state() -> dict:
         view = session.view()
         return {
-            "session": {**asdict(view), "muted": list(view.muted)},
+            "session": {
+                **asdict(view),
+                "muted": list(view.muted),
+                "stems": stems(view.entry_id),
+            },
             "playlist": [entry_json(entry) for entry in playlist.entries()],
         }
 

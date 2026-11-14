@@ -334,12 +334,44 @@ During an event, the public reaches the karaoke through a link to `/karaoke` on 
   - the **requests**, written by the public functions: add, remove and search, each with an id.
 - **Stage side:** `stage serve` publishes the snapshot on every change and every few seconds, and reads the requests about once a second. It applies each one as its own API would (an add is checked as `POST /api/playlist` checks it, §5.8) and writes the answer under the request's id: the entry added, or the refusal code. A search runs `stage search` and writes its results the same way. The Stage reaches the store over HTTPS with a token kept in an environment variable, as `STUDIO_TOKEN` is; without it, the Stage serves only its own screens, as before A10.
 - **Public side:** a build of `web/` with only the public screen, plus a few functions that read the snapshot, leave a request and read its answer. The functions hold the store's token; the browser never sees it.
-- **Lyrics on the phone:** the snapshot carries an anchor, the position of the song at one instant, not a position per poll. The phone computes the position from the anchor and its own clock and moves through the lines on its own, so a slow poll delays only the events (start, end), not the lines. Neither device's clock has to be right: the Stage states the anchor's instant in the store's clock (the time its answers carry), and the phone corrects its own clock from the time each function answer carries. The Stage sends a new anchor on every event and every few seconds, which also corrects the drift between the audio clock and the wall clock (under 7 ms over 8 s in S3). Expected: the lines start on the phone 1 to 2 s after the song does, then follow it; to be measured in A10. The TV keeps its local lyrics (§5.8).
+- **Lyrics on the phone:** the snapshot carries an anchor, the position of the song at one instant, not a position per poll. The phone computes the position from the anchor and its own clock and moves through the lines on its own, so a slow poll delays only the events (start, end), not the lines. Neither device's clock has to be right: the Stage states the anchor's instant in the store's clock (Redis `TIME`), and the phone corrects its own clock against the same store clock through an uncached time route (the snapshot's answer is cached, so the time it would carry is stale). The Stage sends a new anchor on every event and every few seconds, which also corrects the drift between the audio clock and the wall clock (under 7 ms over 8 s in S3). Expected: the lines start on the phone 1 to 2 s after the song does, then follow it; to be measured in A10. The TV keeps its local lyrics (§5.8).
 - **Polling and cost:** phones poll the snapshot every 2 s, and the function's answer is cached at Vercel's edge for 1 s (`s-maxage=1`), so the store sees about one read per second per region however many phones there are. Estimate for a 3 hour event with 20 phones, not measured: about 30,000 store commands (Upstash's free tier allows 500,000 a month), about 11,000 function runs and about 108,000 edge requests (third party sources give Vercel Hobby 1,000,000 of each a month; to be confirmed on Vercel's pricing page). The edge requests grow with the phones and the poll rate, so they are the number to watch.
 - **Latency of a request:** an add or a remove shows in the playlist 2 to 3 s after it is sent (the request read within about a second, a snapshot published, a phone poll). A public search takes the Stage's search time (1.1 to 1.6 s in A7) plus that round trip, about 3 s in all.
 - **When the Stage is off or offline:** the page shows the last snapshot with a notice that the karaoke is offline, from the time the snapshot carries. The Stage's own screens and playback never depend on the internet (§4, principle 1).
 - **Requests left in the store** while the Stage was off are discarded when `stage serve` starts.
-- **Open for A10:** how the public screen follows the §5.7 home, and the layout of the Vercel project.
+- **Public screen:** one route, `/karaoke`, laid out for a phone, with three tabs at the bottom: *Agora* (the song playing, its lyrics following the anchor), *Fila* (the playlist, with remove) and *Buscar* (search and the library, with add). The operator's screens (§5.7) are not in the public build.
+- **Vercel project:** its root is `web/`. The public build is the same React app built in a public mode, with its functions in `web/api/public/`. Vercel deploys it from GitHub: every merge on `main` goes to production, and a pull request gets a preview. The store's credentials exist only in the Production environment, so a preview never touches an event. The link's domain and the credentials stay out of the repository.
+
+**Contract between the Stage and Vercel.** Both sides follow it; A10a builds the Stage side, A10b the Vercel side.
+
+Store keys (Redis, prefix `karaoke:`), all JSON:
+
+| Key | Written by | Value |
+|---|---|---|
+| `karaoke:snapshot` | Stage, on every change and at least every 3 s | `{version: 1, published_at_ms, session, playlist, lyrics}` |
+| `karaoke:library` | Stage, at start and when the library changes | `{published_at_ms, songs}`, each song a search result as `GET /api/library` gives it (§5.8) |
+| `karaoke:requests` | public functions (`RPUSH`); the Stage takes them from the head | `{id, op: "add", song}`, `{id, op: "remove", entry_id}` or `{id, op: "search", q}` |
+| `karaoke:answer:<id>` | Stage, expiring after 120 s | add: `{ok: true, entry_id}` or `{ok: false, error}`; remove: `{ok: true}` or `{ok: false, error}`; search: `{ok: true, results, notice}` |
+
+- **Times** (`published_at_ms`, `anchor.at_ms`) are milliseconds in the store's clock. The Stage learns its offset from Redis `TIME` (half the round trip as the correction) and refreshes it every minute.
+- **`session`:** `{state, entry_id, duration_s, anchor}`. `anchor` is `{position_s, at_ms}` while playing, `at_ms` being the moment REAPER reported that position (not the moment of publishing), and null otherwise.
+- **`playlist`:** the entries of `GET /api/state` (§5.8) without `detail`: `{id, state, step, progress, error, song}`. The detail is English text for the logs, and an unreachable Studio's detail carries its address. The session's own `error` and `detail` (REAPER errors) are not published either.
+- **`lyrics`:** while playing, the lyrics of the song playing as `GET /api/library/{song_id}/lyrics` gives them, plus its `song_id`; null otherwise.
+- **Requests:** an `add` carries a search or library result as `POST /api/playlist` takes it; the Stage applies each request as its own API would (refusals `not_addable`, `unknown_entry`, `entry_playing`), and a search runs `stage search` (`notice` `offline` when the online search failed). A request the Stage cannot read gets `{ok: false, error: "invalid_request"}` when it has an id, and is dropped otherwise. When `stage serve` starts it deletes `karaoke:requests`.
+- **Stage configuration:** the Upstash REST URL and token in the environment variables `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN`. Without both, `stage serve` publishes nothing and reads no requests, as before A10, and says so on stderr. A store that does not answer never stops playback or the local screens: the Stage logs it and tries again on its next cycle.
+
+Public routes (Vercel functions, under `/api/public/`; the store's credentials are read only there):
+
+| Method | Route | Answer |
+|---|---|---|
+| `GET` | `/api/public/state` | The snapshot as stored, or `{version: 1, snapshot: null}` before the first one. Cached at the edge for 1 s. |
+| `GET` | `/api/public/library` | The library as stored, or `{songs: []}`. Cached at the edge for 5 s. |
+| `GET` | `/api/public/time` | `{now_ms}` from Redis `TIME`. Never cached. The phone calls it at start and every minute, and keeps `offset = now_ms - (sent + received) / 2`. |
+| `POST` | `/api/public/requests` | Takes `{op: "add", song}`, `{op: "remove", entry_id}` or `{op: "search", q}`, gives it an id, stores only those fields and answers 202 `{id}`; any other body is 422 `{error: "invalid_request"}`. |
+| `GET` | `/api/public/requests/{id}` | The answer, or 404 `{error: "pending"}` while there is none. Never cached. The phone polls it every second and gives up after 15 s. |
+
+- **Offline:** the phone treats the Stage as offline when `published_at_ms` is more than 10 s behind its corrected clock, or when there is no snapshot.
+- **Phone polling:** the snapshot every 2 s, the library when the *Buscar* tab opens. While playing, the position is `anchor.position_s + (corrected now - anchor.at_ms) / 1000`, never past `duration_s`.
 
 ---
 
@@ -517,6 +549,7 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 - **Stage:** with REAPER closed, the shortcut's script opened REAPER with the session, started `stage serve` in its own window and opened Edge full screen at `/karaoke`, with no first run page, in about 2 s. Run with REAPER open, it left REAPER as it was. The maintainer played a library song through the screens: it played with its lyrics following.
 - **Review fixes:** `studio-start` now waits 5 s and, when the server already stopped (an empty token file, the separation extra missing, the port in use), shows the end of the log and exits 1 instead of reporting it started; both Studio scripts require an elevated session, since outside one the command lines of elevated processes read as empty and the check for a running server would go blind; the server filter requires `serve` right after `studio.exe`; an empty token file no longer breaks the shortcut.
 - **Messages from Windows itself** (a failed cmdlet, the elevation refusal, a Windows error in the log) come in the language of Windows; every message the scripts write is in English.
+- **Dress rehearsal at home:** the Studio started with `studio-start`, the Stage with the shortcut's script, and the maintainer added a song not in the library through the screens: ready 4 min 37 s after it was added, then sung. On the Studio: `starting` 41 s (the models loading for the first job after the server started), `downloading` 17 s, separation 72 s (vocals), 75 s (karaoke) and 20 s (instruments), 167 s in all for a 5:00 song, the 0.56 of its length S2 measured, then lyrics and packaging 6 s. The download to the Stage took 46 s for 98.5 MB in 8 files (about 17 Mbit/s, under the 38 Mbit/s of A5 on the same network; not investigated).
 
 ### Phase 2: beta
 

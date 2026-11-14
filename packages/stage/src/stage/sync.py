@@ -18,7 +18,7 @@ from core.studio_api import SongSummary
 from pydantic import ValidationError
 
 from stage import library as lib
-from stage.client import StudioClient, StudioError
+from stage.client import StudioClient, StudioError, StudioUnreachable
 
 log = logging.getLogger(__name__)
 
@@ -108,7 +108,11 @@ def sync(
         if current is not None and _same_version(current.manifest, song):
             summary.unchanged += 1
         else:
-            record(_install(library, studio, song, summary))
+            try:
+                outcome = _install(library, studio, song, summary)
+            except StudioUnreachable as error:
+                outcome = Outcome(song_id, "failed", str(error))
+            record(outcome)
     return summary
 
 
@@ -121,7 +125,10 @@ def fetch(
     """Download and install one song the Studio lists, as a sync installs it.
 
     None when the library already holds the version the Studio lists. A
-    StudioError on the listing propagates.
+    StudioError on the listing, and a StudioUnreachable while downloading,
+    propagate; so does an exception on_progress raises, which stops the
+    download there. The partial folder stays, and a later fetch or sync
+    resumes it.
     """
     song = next((song for song in studio.songs() if song.id == song_id), None)
     if song is None or not lib.is_song_id(song_id):
@@ -159,10 +166,13 @@ def _install(
 ) -> Outcome:
     """Download the song into its partial folder, then move it into place.
 
-    The old version is replaced only once the new one is complete.
+    The old version is replaced only once the new one is complete. A
+    StudioUnreachable propagates, so a caller can try again later.
     """
     try:
         errors = _download(library, studio, song, summary, on_progress)
+    except StudioUnreachable:
+        raise
     except StudioError as error:
         return Outcome(song.id, "failed", str(error))
     except ValidationError as error:
@@ -223,7 +233,11 @@ def _download(
     summary: Summary,
     on_progress: OnProgress,
 ) -> list[str]:
-    """Fill the partial folder of song and return the reasons it is not complete."""
+    """Fill the partial folder of song and return the reasons it is not complete.
+
+    Every file is tried; when one failed for want of an answer, the reasons
+    are raised as StudioUnreachable instead.
+    """
     partial = lib.partial_folder(library, song.id)
     manifest = _kept_manifest(partial, song)
     if manifest is None:
@@ -249,8 +263,13 @@ def _download(
         on_progress(progress)
 
     errors = []
+    unreachable = False
     for stem in manifest.stems.values():
-        error = _download_stem(studio, song.id, partial, stem, summary, received)
+        try:
+            error = _download_stem(studio, song.id, partial, stem, summary, received)
+        except StudioError as failure:
+            error = f"{stem.file}: {failure}"
+            unreachable = unreachable or isinstance(failure, StudioUnreachable)
         if error is not None:
             errors.append(error)
         file_done()
@@ -260,9 +279,12 @@ def _download(
             summary.bytes_downloaded += _fetch(
                 studio, song.id, manifest.lyrics.file, target, received
             )
-        except StudioError as error:
-            errors.append(f"{manifest.lyrics.file}: {error}")
+        except StudioError as failure:
+            errors.append(f"{manifest.lyrics.file}: {failure}")
+            unreachable = unreachable or isinstance(failure, StudioUnreachable)
         file_done()
+    if unreachable:
+        raise StudioUnreachable("; ".join(errors))
     return errors
 
 
@@ -276,15 +298,12 @@ def _download_stem(
 ) -> str | None:
     """Download one stem unless the partial already holds it whole.
 
-    Returns why the stem is not complete, or None.
+    Returns None, or why the stem does not match; a StudioError propagates.
     """
     target = partial / stem.file
     if target.is_file() and _sha256(target) == stem.sha256:
         return None
-    try:
-        summary.bytes_downloaded += _fetch(studio, song_id, stem.file, target, on_chunk)
-    except StudioError as error:
-        return f"{stem.file}: {error}"
+    summary.bytes_downloaded += _fetch(studio, song_id, stem.file, target, on_chunk)
     if _sha256(target) != stem.sha256:
         target.unlink()
         return (

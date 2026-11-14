@@ -6,7 +6,7 @@ import httpx2
 import pytest
 from core.manifest import YouTubeMusicSource
 from core.studio_api import Job, JobRequest, SongSummary
-from stage.client import StudioClient, StudioError, UnknownJob
+from stage.client import StudioClient, StudioError, StudioUnreachable, UnknownJob
 
 SONG = "song-title--artist-name--a1b2c3"
 LEAD = "stems/lead.flac"
@@ -171,16 +171,17 @@ def test_a_wrong_token_is_a_studio_error(studio) -> None:
         client.songs()
 
     assert str(caught.value) == "the Studio answered 401: missing or wrong token"
+    assert not isinstance(caught.value, StudioUnreachable)
 
 
-def test_an_unreachable_studio_is_a_studio_error() -> None:
+def test_an_unreachable_studio_is_studio_unreachable() -> None:
     def refuse(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("connection refused", request=request)
 
     http = httpx2.Client(transport=httpx2.MockTransport(refuse))
 
     client = StudioClient("http://studio.invalid:8790", "token", http=http)
-    with client, pytest.raises(StudioError) as caught:
+    with client, pytest.raises(StudioUnreachable) as caught:
         client.songs()
 
     assert str(caught.value) == "could not reach the Studio (connection refused)"
@@ -265,14 +266,14 @@ def test_an_unknown_job_is_its_own_error(studio) -> None:
     assert str(caught.value) == "the Studio answered 404: unknown job"
 
 
-def test_create_job_on_an_unreachable_studio_is_a_studio_error() -> None:
+def test_create_job_on_an_unreachable_studio_is_studio_unreachable() -> None:
     def refuse(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("connection refused", request=request)
 
     http = httpx2.Client(transport=httpx2.MockTransport(refuse))
 
     client = StudioClient("http://studio.invalid:8790", "token", http=http)
-    with client, pytest.raises(StudioError) as caught:
+    with client, pytest.raises(StudioUnreachable) as caught:
         client.create_job(job_request())
 
     assert str(caught.value) == "could not reach the Studio (connection refused)"

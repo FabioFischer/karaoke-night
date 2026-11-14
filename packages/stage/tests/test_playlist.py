@@ -4,9 +4,12 @@ from pathlib import Path
 
 import pytest
 from core.studio_api import Job, JobCreated, JobRequest
-from stage.client import StudioClient, StudioError, UnknownJob
+from stage.client import StudioClient, StudioError, StudioUnreachable, UnknownJob
 from stage.playlist import NotAddable, Playlist
 from stage.search import Result
+
+UNREACHABLE = "could not reach the Studio (connection refused)"
+REPROCESSED_AT = "2026-11-13T20:00:00Z"
 
 SONG = "song-title--artist-name--a1b2c3"
 VIDEO_ID = "XXXXXXXXXXX"
@@ -40,7 +43,9 @@ class ScriptedStudio:
 
     Each job answers the statuses of script in order, the last one repeating.
     Song listings, manifests and files come from the real Studio of conftest.
-    forget() makes the Studio forget every job, as a restart does.
+    forget() makes the Studio forget every job, as a restart does. unreachable
+    makes the job calls fail as a network error does, refusal as an error
+    answer of the Studio does.
     """
 
     def __init__(self, real: StudioClient, script: list[Job]) -> None:
@@ -50,16 +55,21 @@ class ScriptedStudio:
         self.reads: dict[str, int] = {}
         self.forgotten: set[str] = set()
         self.unreachable = False
+        self.refusal: StudioError | None = None
+
+    def _answer(self) -> None:
+        if self.unreachable:
+            raise StudioUnreachable(UNREACHABLE)
+        if self.refusal is not None:
+            raise self.refusal
 
     def create_job(self, request: JobRequest) -> JobCreated:
-        if self.unreachable:
-            raise StudioError("could not reach the Studio (connection refused)")
+        self._answer()
         self.created.append(request)
         return JobCreated(job_id=f"job-{len(self.created)}", song_id=SONG)
 
     def job(self, job_id: str) -> Job:
-        if self.unreachable:
-            raise StudioError("could not reach the Studio (connection refused)")
+        self._answer()
         if job_id in self.forgotten:
             raise UnknownJob("the Studio answered 404: unknown job", 404)
         read = self.reads.get(job_id, 0)
@@ -231,7 +241,9 @@ def test_a_job_the_studio_forgot_is_submitted_again(
     assert states(playlist) == [("ready", None)]
 
 
-def test_an_unreachable_studio_fails_the_entry(library: Path, scripted) -> None:
+def test_an_unreachable_studio_keeps_the_entry_queued_and_retries(
+    library: Path, scripted
+) -> None:
     fake = scripted(job("downloading"))
     fake.unreachable = True
     playlist = Playlist(library, fake)
@@ -241,14 +253,22 @@ def test_an_unreachable_studio_fails_the_entry(library: Path, scripted) -> None:
 
     (entry,) = playlist.entries()
     assert (entry.state, entry.error, entry.detail) == (
-        "failed",
-        "studio_error",
-        "could not reach the Studio (connection refused)",
+        "queued",
+        "studio_unreachable",
+        UNREACHABLE,
     )
+    fake.unreachable = False
+    playlist.advance()
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error, entry.detail) == ("downloading", None, None)
+    assert len(fake.created) == 1
 
 
-def test_a_studio_lost_mid_job_fails_the_entry(library: Path, scripted) -> None:
-    fake = scripted(job("downloading"))
+def test_a_studio_lost_mid_job_keeps_the_state_until_it_answers(
+    studio, library: Path, scripted
+) -> None:
+    studio.add(SONG)
+    fake = scripted(job("separating", step="vocals"), job("done"))
     playlist = Playlist(library, fake)
     playlist.add(new_song())
     playlist.advance()
@@ -256,7 +276,158 @@ def test_a_studio_lost_mid_job_fails_the_entry(library: Path, scripted) -> None:
 
     playlist.advance()
 
-    assert playlist.entries()[0].error == "studio_error"
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.step, entry.error, entry.detail) == (
+        "separating",
+        "vocals",
+        "studio_unreachable",
+        UNREACHABLE,
+    )
+    fake.unreachable = False
+    playlist.advance()
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error, entry.detail) == ("ready", None, None)
+
+
+def test_an_error_answer_of_the_studio_fails_the_entry(library: Path, scripted) -> None:
+    fake = scripted(job("downloading"))
+    playlist = Playlist(library, fake)
+    playlist.add(new_song())
+    playlist.advance()
+    fake.refusal = StudioError("the Studio answered 401: missing or wrong token", 401)
+
+    playlist.advance()
+
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error, entry.detail) == (
+        "failed",
+        "studio_error",
+        "the Studio answered 401: missing or wrong token",
+    )
+
+
+def test_a_fetch_cut_by_the_network_resumes_on_the_next_cycle(
+    studio, library: Path, scripted
+) -> None:
+    studio.add(SONG)
+    fake = scripted(job("done"))
+    playlist = Playlist(library, fake)
+    playlist.add(new_song())
+    download = fake.download
+    cut = []
+
+    def cutting(song_id, path, target, on_chunk) -> int:
+        if not cut:
+            cut.append(path)
+            target.write_bytes(studio.file(song_id, path).read_bytes()[:100])
+            raise StudioUnreachable("could not reach the Studio (connection lost)")
+        return download(song_id, path, target, on_chunk)
+
+    fake.download = cutting
+    playlist.advance()
+
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error, entry.detail) == (
+        "fetching",
+        "studio_unreachable",
+        "stems/lead.flac: could not reach the Studio (connection lost)",
+    )
+    assert (library / f".{SONG}.partial").is_dir()
+    assert not (library / SONG).exists()
+    playlist.advance()
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error, entry.detail) == ("ready", None, None)
+    assert (library / SONG / "stems" / "lead.flac").read_bytes() == studio.file(
+        SONG, "stems/lead.flac"
+    ).read_bytes()
+
+
+def test_a_stem_that_does_not_match_still_fails_the_entry(
+    studio, library: Path, scripted
+) -> None:
+    studio.add(SONG)
+    studio.file(SONG, "stems/lead.flac").write_bytes(b"not the stem")
+    playlist = Playlist(library, scripted(job("done")))
+    playlist.add(new_song())
+
+    playlist.advance()
+
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error) == ("failed", "fetch_failed")
+    assert "stems/lead.flac does not match the sha256" in entry.detail
+
+
+def test_an_entry_removed_while_the_worker_runs_gets_no_job(
+    library: Path, scripted
+) -> None:
+    fake = scripted(job("downloading"))
+    playlist = Playlist(library, fake)
+    playlist.add(new_song())
+    removed = playlist.add(new_song())
+    create_job = fake.create_job
+
+    def removing(request: JobRequest) -> JobCreated:
+        playlist.remove(removed.id)
+        return create_job(request)
+
+    fake.create_job = removing
+    playlist.advance()
+
+    assert len(fake.created) == 1
+    assert [entry.state for entry in playlist.entries()] == ["downloading"]
+
+
+def test_an_entry_removed_during_its_fetch_stops_and_frees_the_worker(
+    studio, library: Path, scripted
+) -> None:
+    studio.add(SONG)
+    fake = scripted(job("done"))
+    playlist = Playlist(library, fake)
+    removed = playlist.add(new_song())
+    playlist.add(new_song())
+    download = fake.download
+    files = []
+
+    def removing(song_id, path, target, on_chunk) -> int:
+        files.append(path)
+        if len(files) == 1:
+            playlist.remove(removed.id)
+        return download(song_id, path, target, on_chunk)
+
+    fake.download = removing
+    playlist.advance()
+
+    # The removed entry stopped inside its first file; the other one resumed
+    # from the partial folder it left and downloaded every file.
+    assert files == [
+        "stems/lead.flac",
+        "stems/lead.flac",
+        "stems/other.flac",
+        "lyrics.lrc",
+    ]
+    assert [entry.state for entry in playlist.entries()] == ["ready"]
+    assert (library / SONG / "manifest.json").is_file()
+
+
+def test_an_update_a_loaded_song_blocks_leaves_the_entry_ready(
+    studio, library: Path, scripted, refuse_rename
+) -> None:
+    studio.add(SONG)
+    installed = Playlist(library, scripted(job("done")))
+    installed.add(new_song())
+    installed.advance()
+    studio.add(SONG, created_at=REPROCESSED_AT)
+    refuse_rename(SONG)
+    playlist = Playlist(library, scripted(job("done")))
+    playlist.add(new_song())
+
+    playlist.advance()
+
+    (entry,) = playlist.entries()
+    assert (entry.state, entry.error) == ("ready", None)
+    assert (library / SONG / "manifest.json").read_bytes() != studio.file(
+        SONG, "manifest.json"
+    ).read_bytes()
 
 
 def test_without_a_studio_a_new_song_fails(library: Path) -> None:

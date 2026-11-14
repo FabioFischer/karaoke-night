@@ -18,7 +18,7 @@ from core.studio_api import Job, JobRequest
 from pydantic import ValidationError
 
 from stage import library as lib
-from stage.client import StudioClient, StudioError, UnknownJob
+from stage.client import StudioClient, StudioError, StudioUnreachable, UnknownJob
 from stage.search import Result, from_library
 from stage.sync import Progress, fetch
 
@@ -40,6 +40,8 @@ EntryState = Literal[
 FailureCode = Literal[
     "no_studio", "studio_error", "job_failed", "fetch_failed", "internal_error"
 ]
+# The entry keeps its state and the worker tries again on its next cycle.
+WarningCode = Literal["studio_unreachable"]
 FINISHED = ("ready", "failed")
 
 NO_STUDIO = (
@@ -52,14 +54,19 @@ class NotAddable(Exception):
     """The song is not in the library and cannot become a Studio job."""
 
 
+class _Removed(Exception):
+    """The entry left the playlist while the worker downloaded its package."""
+
+
 @dataclass
 class Entry:
     """One song of the playlist and how far it is from being playable.
 
     step is the separation step while separating, progress the download to
-    the Stage while fetching, error a FailureCode once failed. detail is an
-    English line for the logs: why it failed, or the last error of a job that
-    waits for a retry.
+    the Stage while fetching. error is a FailureCode once failed, or a
+    WarningCode while the worker waits to try again. detail is an English
+    line for the logs: why it failed or waits, or the last error of a job
+    that waits for a retry.
     """
 
     id: str
@@ -67,7 +74,7 @@ class Entry:
     state: EntryState
     step: str | None = None
     progress: Progress | None = None
-    error: FailureCode | None = None
+    error: FailureCode | WarningCode | None = None
     detail: str | None = None
     job_id: str | None = None
     request: JobRequest | None = None
@@ -169,6 +176,13 @@ class Playlist:
             self.advance()
 
     def _advance(self, entry: Entry) -> None:
+        """One step for entry, unless it left the playlist since advance() began.
+
+        Every step checks the entry is still listed first: a removed entry
+        gets no job, no poll and no download.
+        """
+        if not self._holds(entry):
+            return
         if self._studio is None:
             self._fail(entry, "no_studio", NO_STUDIO)
             return
@@ -186,6 +200,11 @@ class Playlist:
                 )
                 self._submit(entry)
                 job = self._studio.job(entry.job_id)
+        except _Removed:
+            return
+        except StudioUnreachable as error:
+            self._wait(entry, str(error))
+            return
         except StudioError as error:
             self._fail(entry, "studio_error", str(error))
             return
@@ -194,9 +213,17 @@ class Playlist:
         elif job.status == "done":
             self._fetch(entry)
         else:
-            self._set(entry, state=job_state(job), step=job.step, detail=job.error)
+            self._set(
+                entry,
+                state=job_state(job),
+                step=job.step,
+                error=None,
+                detail=job.error,
+            )
 
     def _submit(self, entry: Entry) -> None:
+        if not self._holds(entry):
+            raise _Removed
         created = self._studio.create_job(entry.request)
         self._set(
             entry,
@@ -205,15 +232,26 @@ class Playlist:
         )
 
     def _fetch(self, entry: Entry) -> None:
-        song_id = entry.song.song_id
-        self._set(entry, state="fetching", step=None, detail=None)
+        if not self._holds(entry):
+            return
+        self._set(entry, state="fetching", step=None, error=None, detail=None)
+
+        def on_progress(progress: Progress) -> None:
+            # Checked on every chunk, so a removed entry frees the worker at once.
+            if not self._holds(entry):
+                raise _Removed
+            self._set(entry, progress=progress)
+
         try:
             outcome = fetch(
-                self._library,
-                self._studio,
-                song_id,
-                lambda progress: self._set(entry, progress=progress),
+                self._library, self._studio, entry.song.song_id, on_progress
             )
+        except _Removed:
+            log.info("%s left the playlist; its download stops", entry.song.title)
+            return
+        except StudioUnreachable as error:
+            self._wait(entry, str(error))
+            return
         except StudioError as error:
             self._fail(entry, "studio_error", str(error))
             return
@@ -223,6 +261,10 @@ class Playlist:
         else:
             self._fail(entry, "fetch_failed", outcome.reason)
 
+    def _holds(self, entry: Entry) -> bool:
+        with self._lock:
+            return any(held is entry for held in self._entries)
+
     def _set(self, entry: Entry, **fields) -> None:
         with self._lock:
             for name, value in fields.items():
@@ -231,6 +273,11 @@ class Playlist:
     def _fail(self, entry: Entry, code: FailureCode, detail: str) -> None:
         log.warning("%s failed (%s): %s", entry.song.title, code, detail)
         self._set(entry, state="failed", step=None, error=code, detail=detail)
+
+    def _wait(self, entry: Entry, detail: str) -> None:
+        """Keep the state and show why; the next cycle tries again."""
+        log.warning("%s waits for the Studio: %s", entry.song.title, detail)
+        self._set(entry, error="studio_unreachable", detail=detail)
 
 
 def _new_id() -> str:

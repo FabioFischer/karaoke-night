@@ -2,7 +2,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from stage.client import StudioClient, StudioError
+from stage.client import StudioClient, StudioUnreachable
 from stage.sync import Outcome, Progress, fetch
 
 FIRST = "first-song--first-artist--a1b2c3"
@@ -126,5 +126,41 @@ def test_fetch_on_an_unreachable_studio_raises(library: Path) -> None:
 
     http = httpx2.Client(transport=httpx2.MockTransport(refuse))
     client = StudioClient("http://studio.invalid:8790", "token", http=http)
-    with client, pytest.raises(StudioError):
+    with client, pytest.raises(StudioUnreachable):
         fetch(library, client, FIRST)
+
+
+def test_fetch_cut_by_the_network_raises_and_keeps_the_partial(
+    studio, library: Path
+) -> None:
+    studio.add(FIRST)
+    inner = studio.http()
+
+    def lose_the_lead(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith("/stems/lead.flac"):
+            raise httpx2.ReadError("connection lost", request=request)
+        response = inner.send(request)
+        return httpx2.Response(response.status_code, content=response.content)
+
+    http = httpx2.Client(transport=httpx2.MockTransport(lose_the_lead))
+    client = StudioClient("http://testserver", "test-token", http=http)
+    with client, pytest.raises(StudioUnreachable) as caught:
+        fetch(library, client, FIRST)
+
+    assert str(caught.value) == (
+        "stems/lead.flac: could not reach the Studio (connection lost)"
+    )
+    partial = library / f".{FIRST}.partial"
+    assert (partial / "stems" / "other.flac").is_file()
+    assert not (library / FIRST).exists()
+
+
+def test_fetch_refuses_an_id_the_stage_does_not_accept(studio, library: Path) -> None:
+    bad_id = "Upper-Case--Artist--a1b2c3"
+    studio.add(bad_id)
+
+    outcome = run(library, studio, bad_id)
+
+    assert outcome == Outcome(bad_id, "failed", "the Studio does not list the song")
+    assert [request.url.path for request in studio.requests] == ["/songs"]
+    assert not library.exists()

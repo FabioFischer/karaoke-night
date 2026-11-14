@@ -34,6 +34,10 @@ class UnknownJob(StudioError):
     """The Studio does not know the job: it forgets its jobs when it restarts."""
 
 
+class StudioUnreachable(StudioError):
+    """No answer from the Studio: the network or the Studio is down, for now."""
+
+
 class _RangeNotSatisfiable(Exception):
     pass
 
@@ -85,7 +89,7 @@ class StudioClient:
                 json=request.model_dump(mode="json"),
             )
         except _UNREACHABLE as error:
-            raise StudioError(f"could not reach the Studio ({error})") from None
+            raise StudioUnreachable(f"could not reach the Studio ({error})") from None
         _raise_for_status(response)
         return _parse_job(JobCreated, response.content)
 
@@ -140,13 +144,13 @@ class StudioClient:
                         on_chunk(len(chunk))
                 return received
         except _UNREACHABLE as error:
-            raise StudioError(f"could not reach the Studio ({error})") from None
+            raise StudioUnreachable(f"could not reach the Studio ({error})") from None
 
     def _get(self, url: str) -> bytes:
         try:
             response = self._http.get(self.base_url + url, headers=self._auth)
         except _UNREACHABLE as error:
-            raise StudioError(f"could not reach the Studio ({error})") from None
+            raise StudioUnreachable(f"could not reach the Studio ({error})") from None
         _raise_for_status(response)
         return response.content
 

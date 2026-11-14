@@ -1,6 +1,6 @@
 import { api, type StageState } from '../api'
 import { currentEntry, formatTime, sessionFailure } from '../session'
-import { useAction } from '../stage-state'
+import { useAction } from '../calls'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
 import { LyricsView } from './LyricsView'

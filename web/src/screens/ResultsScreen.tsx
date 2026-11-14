@@ -3,7 +3,7 @@ import { api, type StageState } from '../api'
 import { EntryStatus } from '../components/EntryStatus'
 import { ErrorNote } from '../components/ErrorNote'
 import { sessionFailure, upcomingEntries } from '../session'
-import { useAction } from '../stage-state'
+import { useAction } from '../calls'
 import { text } from '../text'
 
 /** /karaoke/stage/results: the end of a performance and the way to the next song. */

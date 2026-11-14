@@ -1,12 +1,18 @@
-import type { Entry, Session, StageState } from './api'
+import type { Entry, Session } from './api'
+
+/** What the playlist helpers read: the Stage's own state, or the snapshot a phone sees. */
+export interface PlaylistView {
+  session: Pick<Session, 'state' | 'entry_id'>
+  playlist: Entry[]
+}
 
 /** The song of the session: the first entry in setup, the one played afterwards. */
-export function currentEntry(state: StageState): Entry | null {
+export function currentEntry(state: PlaylistView): Entry | null {
   return state.playlist.find((entry) => entry.id === state.session.entry_id) ?? null
 }
 
 /** Every entry but the song of the session, in order. */
-export function upcomingEntries(state: StageState): Entry[] {
+export function upcomingEntries(state: PlaylistView): Entry[] {
   return state.playlist.filter((entry) => entry.id !== state.session.entry_id)
 }
 
@@ -15,7 +21,7 @@ export function upcomingEntries(state: StageState): Entry[] {
  * the setup nothing plays, so the current song is listed too: a song that
  * failed can be taken off and the next one comes up.
  */
-export function listedEntries(state: StageState): Entry[] {
+export function listedEntries(state: PlaylistView): Entry[] {
   return state.session.state === 'setup' ? state.playlist : upcomingEntries(state)
 }
 

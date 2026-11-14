@@ -1,7 +1,7 @@
 import { Link } from 'react-router'
 import { api, type StageState } from '../api'
 import { currentEntry, listedEntries, sessionFailure } from '../session'
-import { useAction } from '../stage-state'
+import { useAction } from '../calls'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
 import { KeyControl } from './KeyControl'

@@ -32,3 +32,4 @@ dist/
 # Web dependencies and build output
 node_modules/
 web/dist/
+web/dist-public/

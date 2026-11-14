@@ -4,7 +4,7 @@ import { EntryStatus } from '../components/EntryStatus'
 import { PlaylistItem } from '../components/PlaylistItem'
 import { SongFinder } from '../components/SongFinder'
 import { currentEntry, listedEntries } from '../session'
-import { text } from '../text'
+import { sessionHeadings, text } from '../text'
 
 /** /karaoke: the current song, the search and the library, and the playlist on the right. */
 export function HomeScreen({ state }: { state: StageState }) {
@@ -22,12 +22,6 @@ export function HomeScreen({ state }: { state: StageState }) {
   )
 }
 
-const HEADINGS = {
-  setup: text.home.current,
-  playing: text.home.nowPlaying,
-  results: text.home.ended,
-}
-
 function CurrentSong({ state }: { state: StageState }) {
   const entry = currentEntry(state)
   if (entry === null) {
@@ -39,7 +33,7 @@ function CurrentSong({ state }: { state: StageState }) {
   }
   return (
     <section className="current-song">
-      <p className="eyebrow">{HEADINGS[state.session.state]}</p>
+      <p className="eyebrow">{sessionHeadings[state.session.state]}</p>
       <h1>{entry.song.title}</h1>
       <p className="artist">{entry.song.artist}</p>
       {state.session.state === 'setup' && <EntryStatus entry={entry} />}

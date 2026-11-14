@@ -56,7 +56,11 @@ def scan(library: Path) -> dict[str, Song]:
         path = folder / "manifest.json"
         if folder.name.startswith(".") or not path.is_file():
             continue
-        raw = path.read_bytes()
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            # Moved away since the listing: a sync or the worker swaps packages.
+            continue
         try:
             manifest = Manifest.model_validate_json(raw)
         except ValidationError as error:

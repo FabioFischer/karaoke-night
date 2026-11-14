@@ -5,12 +5,12 @@ import { ErrorNote } from './ErrorNote'
 import { PlaylistItem } from './PlaylistItem'
 
 interface Props {
-  upcoming: Entry[]
+  entries: Entry[]
   canSkip: boolean
 }
 
-/** The bottom bar of the setup: the songs after this one, and the skip to the next. */
-export function PlaylistBar({ upcoming, canSkip }: Props) {
+/** The bottom bar of the setup: the playlist, this song included, and the skip to the next. */
+export function PlaylistBar({ entries, canSkip }: Props) {
   const skip = useAction()
   return (
     <footer className="bottom-bar playlist-bar">
@@ -25,11 +25,11 @@ export function PlaylistBar({ upcoming, canSkip }: Props) {
         </button>
       </div>
       {skip.error && <ErrorNote code={skip.error.code} detail={skip.error.detail} />}
-      {upcoming.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="muted">{text.home.noUpcoming}</p>
       ) : (
         <ul className="playlist playlist-row">
-          {upcoming.map((entry) => (
+          {entries.map((entry) => (
             <PlaylistItem key={entry.id} entry={entry} />
           ))}
         </ul>

@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import { api, type StageState } from '../api'
-import { currentEntry, sessionFailure, upcomingEntries } from '../session'
+import { currentEntry, listedEntries, sessionFailure } from '../session'
 import { useAction } from '../stage-state'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
@@ -73,7 +73,7 @@ export function SetupView({ state }: { state: StageState }) {
           </>
         )}
       </main>
-      <PlaylistBar upcoming={upcomingEntries(state)} canSkip={entry !== null} />
+      <PlaylistBar entries={listedEntries(state)} canSkip={entry !== null} />
     </div>
   )
 }

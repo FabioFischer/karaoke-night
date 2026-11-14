@@ -10,6 +10,15 @@ export function upcomingEntries(state: StageState): Entry[] {
   return state.playlist.filter((entry) => entry.id !== state.session.entry_id)
 }
 
+/**
+ * The entries the playlist lists, each with its state and a remove button. In
+ * the setup nothing plays, so the current song is listed too: a song that
+ * failed can be taken off and the next one comes up.
+ */
+export function listedEntries(state: StageState): Entry[] {
+  return state.session.state === 'setup' ? state.playlist : upcomingEntries(state)
+}
+
 /** m:ss, or an empty string for an unknown time. */
 export function formatTime(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return ''

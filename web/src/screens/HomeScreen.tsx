@@ -3,10 +3,10 @@ import type { StageState } from '../api'
 import { EntryStatus } from '../components/EntryStatus'
 import { PlaylistItem } from '../components/PlaylistItem'
 import { SongFinder } from '../components/SongFinder'
-import { currentEntry, upcomingEntries } from '../session'
+import { currentEntry, listedEntries } from '../session'
 import { text } from '../text'
 
-/** /karaoke: the current song, the search and the library, and the upcoming songs on the right. */
+/** /karaoke: the current song, the search and the library, and the playlist on the right. */
 export function HomeScreen({ state }: { state: StageState }) {
   return (
     <div className="home">
@@ -16,7 +16,7 @@ export function HomeScreen({ state }: { state: StageState }) {
       </main>
       <aside className="home-upcoming">
         <h2>{text.home.upcoming}</h2>
-        <UpcomingList state={state} />
+        <PlaylistPanel state={state} />
       </aside>
     </div>
   )
@@ -50,12 +50,12 @@ function CurrentSong({ state }: { state: StageState }) {
   )
 }
 
-function UpcomingList({ state }: { state: StageState }) {
-  const upcoming = upcomingEntries(state)
-  if (upcoming.length === 0) return <p className="muted">{text.home.noUpcoming}</p>
+function PlaylistPanel({ state }: { state: StageState }) {
+  const entries = listedEntries(state)
+  if (entries.length === 0) return <p className="muted">{text.home.noUpcoming}</p>
   return (
     <ul className="playlist">
-      {upcoming.map((entry) => (
+      {entries.map((entry) => (
         <PlaylistItem key={entry.id} entry={entry} />
       ))}
     </ul>

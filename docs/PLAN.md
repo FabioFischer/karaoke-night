@@ -253,7 +253,7 @@ Every screen shares one **playlist**: the songs lined up for the night, in order
 
 **Home (`/karaoke`)**
 
-- With a playlist: the song playing, or the current one, with a prominent button to go to Stage mode. The upcoming songs sit in a side panel on the right, with reorder, remove and the processing state of each.
+- With a playlist: the song playing, or the current one, with a prominent button to go to Stage mode. The upcoming songs sit in a side panel on the right, with reorder, remove and the processing state of each. While no song plays (the setup), the current song is listed there too, so a song that failed can be taken off.
 - Search on YouTube: the user types a text and gets the first results, about 10. Each shows the full title, the thumbnail, a button to hear a random excerpt of the original recording (not processed) and a button to add it to the playlist.
 - Library: the songs already downloaded, with the same options as the search results.
 
@@ -262,7 +262,7 @@ Every screen shares one **playlist**: the songs lined up for the night, in order
 - A progress bar while the current song is not ready on the Stage yet.
 - The song's setup: music volume against mic volume, stems to mute (lead muted by default), and key up or down. Pitch correction stays in REAPER, by hand (§3).
 - A prominent button to start the song.
-- The playlist in a bar at the bottom, with reorder, remove, the processing state of each and a skip to the next song.
+- The playlist in a bar at the bottom, this song included, with reorder, remove, the processing state of each and a skip to the next song.
 
 **Stage mode, while the song plays**
 

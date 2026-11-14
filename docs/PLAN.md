@@ -7,9 +7,10 @@
 *Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4) built and tested locally against a fake web interface: listener, session template, `Player` and `stage play`.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1).
 - **Next:**
-  - the A6 live run in REAPER on the Stage (template, startup line, end of song rule), then the guided test of pitch correction options for the effects chain guide;
+  - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
+  - milestone A7 (search);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -369,6 +370,15 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 - **Add, update, remove:** a temporary package (a copy of one song under another id) was added on the next sync (130.1 MB in 35.3 s), and downloaded again as `updated` once its `created_at` changed on the Studio. With that package loaded in REAPER, deleting it on the Studio and syncing reported it `busy` and kept it whole (exit 0); after REAPER loaded another song, the next sync removed it. No dot folder was left on either machine.
 - **No internet:** with the Stage's Wi-Fi off (internet and Studio both unreachable), `stage list` listed the library and a synced song loaded in REAPER with the S3 listener (95 ms round trip) and played: all stems sounded right, with no dropouts.
 - **For A6:** the stem tracks of the session used for the test still had input monitoring on, as S3 noted; the A6 template sets it off.
+
+**A6 (2026-11-13): pass.** REAPER 7.85 on the Stage, the listener started by `__startup.lua`, the session opened from `reaper/template/karaoke.RPP` with no warning: the mic tracks armed and monitoring, the stem tracks not.
+
+- **Start to end, driven by the Stage:** `stage play` of the shortest test song (2:19) with the lead muted loaded it (load acks of 95 to 124 ms), followed it second by second and printed "the song ended" with exit 0 when REAPER stopped at the end of the project.
+- **How REAPER reports the end:** a 50 ms poll of `TRANSPORT` showed playing (1), paused (2) at the pause button, playing (1) again when it was pressed again, with no stopped state in between, and stopped (0) at the end. At the end the position goes back to where playback last started (31.32 s after a resume there), not to the end of the song, so the rule cannot rest on the duration; "stopped without the Stage asking" is the rule, and a stop by hand (the space bar is play/stop in REAPER) ends the song too. Ctrl+C in a console stopped playback and exited 130.
+- **Listener:** a malformed command got an error ack with its id, and a command with no readable id an error ack without one; the next `ping` answered. A stem track the listener created came with input monitoring off. During the test the S3 listener, started by hand from the action list, was still running next to the startup one and was the one a malformed command killed: start the listener only from `__startup.lua`.
+- **Headroom:** the stems come close to full scale, so the voice on top was quiet, and clipped once raised. The template now holds the stems in a `Music` folder track at -8 dB, which left room for the voice and gives the music one fader.
+- **Input monitoring crackled** on battery until the buffer went up to 512 samples (S1 ran clean at 128 plugged in); repeating it plugged in is pending.
+- **Pitch correction,** the guided test for the effects chain guide (`reaper/README.md`): Graillon 3 Free corrected well but added about 26 ms (from about 30 to about 56 ms round trip at 512 samples), uncomfortable at that buffer; ReaTune added about 7000 samples and is not usable live.
 
 ### Phase 2: beta
 

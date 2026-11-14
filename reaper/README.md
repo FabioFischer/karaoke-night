@@ -24,7 +24,8 @@ Once per Stage machine, then check it again before each night.
 
    Restart REAPER. The listener now runs whenever REAPER is open. Check it with `uv run stage play` on a song of the library (next section): a listener that is not running makes the command fail with "the karaoke listener in REAPER did not answer". Errors from the script appear in REAPER's *ReaScript console output* window.
 6. **Open the session:** *File > Open project*, `reaper/template/karaoke.RPP`. Choose the interface's inputs if they are not inputs 1 and 2. To keep an effects chain or other changes, save the session under another name, outside the clone (*File > Save project as*), and open that one on later nights: loading songs changes the session, and the template in the clone stays as it is.
-7. **A single monitoring path:** the voice is monitored by REAPER's input monitoring on `Mic 1` and `Mic 2` only. Turn off the interface's direct monitoring and any other path (such as Windows' *Listen to this device*): two paths sound doubled and robotic (S1).
+7. **Plugged in, best performance:** run the machine on its charger with Windows' power mode at *Best performance*. On battery, the A6 test needed a 512 sample buffer before input monitoring stopped crackling (S1 ran at 128 plugged in).
+8. **A single monitoring path:** the voice is monitored by REAPER's input monitoring on `Mic 1` and `Mic 2` only. Turn off the interface's direct monitoring and any other path (such as Windows' *Listen to this device*): two paths sound doubled and robotic (S1).
 
 Load a song and play it from a terminal on the Stage, in the repository root:
 
@@ -38,10 +39,21 @@ uv run stage play <song_id> [--library DIR] [--mute STEM ...] [--transpose N]
 - **Everything else** goes to the listener: the Stage sets `SET/EXTSTATE/karaoke/cmd/<percent-encoded JSON>`, the listener runs the command and writes its reply to `karaoke/ack`, and the Stage reads it back with `GET/EXTSTATE/karaoke/ack` until the `id` matches. One command at a time.
 - **`load`** first stops playback (`1016`). The listener then finds the track of each stem by name (it creates the ones missing at the end of the track list, with input monitoring off), deletes the items on those tracks only, and inserts each stem at the start with `gain_db` as item volume. Tracks with other names, such as the mic tracks, are never touched. Keep the timeline free of other items: one that runs past the song keeps playback going after it ends.
 - **`transpose`** sets the pitch of every stem except drums, in semitones. It is absolute: `0` resets it.
-- **If the listener stops answering** (S3 saw it once, while tracks were edited by hand), restart it: run `scripts/karaoke_listener.lua` from the action list, or restart REAPER.
+- **If the listener stops answering** (S3 saw it once, while tracks were edited by hand), restart REAPER. Running `scripts/karaoke_listener.lua` from the action list as well starts a second listener next to the one `__startup.lua` started (seen in the A6 test), so do that only when no listener is running.
 
 ## Effects chain
 
 The effects chain on `Mic 1` and `Mic 2` is chosen by hand in REAPER; the app never picks plugins (`docs/PLAN.md` §3). Effects in the live path must add no latency of their own (§2).
 
-Recommended settings: to come, after a guided test of pitch correction options.
+What adds to the voice's delay: the round trip of the interface and its driver (set by the buffer size), plus the internal latency of every plugin on the mic track. Pitch correction always has some, since it needs a stretch of audio to detect the pitch.
+
+Measured in the guided test (A6, 2026-11-13), on the Stage with an entry-level interface through ASIO4ALL, buffer at 512 samples (running on battery; see the checklist):
+
+| Option | Settings | Result |
+|---|---|---|
+| Graillon 3 Free (Auburn Sounds) | Pitch Engine `G3`; Pitch Shift 0, Formant off; Correction on, Correction Amount 100%, Smooth to taste (minimum is hard tuning), Snap Min low, Snap Max 8, Inertia low; Output **Wet 100%, Dry 0** | Good correction. Adds about 26 ms: the voice went from about 30 ms to about 56 ms round trip, which was uncomfortable at that buffer. |
+| ReaTune (ships with REAPER) | Correction tab, automatic, chromatic | About 7000 samples (about 160 ms) of delay: not usable live. |
+
+- **Dry must be 0 in Graillon.** Dry is the input delayed to line up with the corrected voice; left up, the uncorrected voice sounds under the corrected one.
+- **The `I2` engine** of Graillon is very heavy on the CPU (its guide calls it "very slow mode"): not for live use. Graillon's full edition adds tuning per key, pitch tracking modulation and a doubler; its guide mentions no lower latency.
+- **Still to test:** Graillon at a 128 sample buffer with the machine plugged in. In S1 the same plugin at 128 samples felt comfortable. A native ASIO interface lowers the round trip of the interface, not the plugin's own latency.

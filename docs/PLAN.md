@@ -225,7 +225,9 @@ karaoke-night/
 │  ├─ core/                     # shared models (manifest, contracts), lightweight
 │  ├─ studio/                   # Studio: jobs, download, separation, lyrics (torch, audio-separator)
 │  └─ stage/                    # Stage: local server, library, REAPER bridge, session
-├─ web/                         # React + Vite + TS: TV screen (in the beta, also the phone page)
+├─ web/                         # React + Vite + TS: TV screens, and the public phone page (§5.9)
+│  ├─ api/public/               # Vercel functions of the public page
+│  └─ server/                   # what the functions share: the store, the answers
 ├─ reaper/
 │  ├─ README.md                 # setup checklist, effects chain guide
 │  ├─ scripts/                  # karaoke_listener.lua, lib/json.lua
@@ -372,6 +374,14 @@ Public routes (Vercel functions, under `/api/public/`; the store's credentials a
 
 - **Offline:** the phone treats the Stage as offline when `published_at_ms` is more than 10 s behind its corrected clock, or when there is no snapshot.
 - **Phone polling:** the snapshot every 2 s, the library when the *Buscar* tab opens. While playing, the position is `anchor.position_s + (corrected now - anchor.at_ms) / 1000`, never past `duration_s`.
+
+Filled in by A10b, where the contract left a gap:
+
+- **Caching headers:** the cached routes answer `Vercel-CDN-Cache-Control: max-age=1` (`max-age=5` for the library), which only Vercel's edge reads and does not forward, and `Cache-Control: public, max-age=0, must-revalidate` for the browser. The uncached routes and every error answer `Cache-Control: no-store`.
+- **Store failures:** missing credentials, a store that does not answer or an error answer give 503 `{error: "store_unavailable"}` on every route, logged in Vercel. The phone shows it as the other refusals, in Portuguese.
+- **Request bodies:** `song` must be a JSON object and `entry_id` and `q` strings; the song is stored as sent, for the Stage to check. Fields beyond the contract's are dropped. The id is a random UUID.
+- **Unanswered requests:** after 15 s the phone shows the code `no_answer`, a generic "could not complete" in Portuguese; the request may still be applied later, so it says to check the playlist. A poll lost on the network is retried within the 15 s.
+- **Before the clock is known:** until the first answer of the time route, the phone uses its own clock as it is.
 
 ---
 

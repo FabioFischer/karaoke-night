@@ -28,6 +28,7 @@ The layout is in `docs/PLAN.md` §5.5. Python commands run from the repository r
 | Format | `uv run ruff format` (CI runs `uv run ruff format --check`) |
 | Set up web | `npm ci` |
 | Web build (tsc, then Vite) | `npm run build` |
+| Public web build, for Vercel | `npm run build:public` |
 | Web dev server | `npm run dev` |
 
 ### Studio pipeline
@@ -114,4 +115,12 @@ scripts\studio-stop.ps1
 
 None of them has a test harness: they are proven by parsing and in a live run.
 
-CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.
+### Public page on Vercel
+
+The public page of an event (`docs/PLAN.md` §5.9) is a Vercel project whose root directory is `web/`; `web/vercel.json` sets its build and routes. `npm run build:public` (`vite build --mode public`) builds only the phone's page, `web/public.html` with `src/public/`, into `web/dist-public`: one route, `/karaoke`, with the tabs *Agora*, *Fila* and *Buscar*. The operator's screens are not in it. `npm run build` stays the Stage's own build, served by `stage serve`.
+
+The functions are the files of `web/api/public/` (Node runtime, Web standard handlers); `web/server/` holds what they share, outside `api/` so it is not a function, and `web/server/store.ts` is the only code that reads the store's credentials, `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN` (the Upstash REST URL and token, the same names the Stage uses). They are set by hand in the Vercel project's Production environment only, so a preview never touches an event, and never committed. `tsc -b` checks the functions with `tsconfig.api.json`; their relative imports name the `.js` file, as Node ESM needs.
+
+There is no local Vercel run: the functions are proven by `npm run build` and by calling them in a scratch script against a fake store, never against the real one.
+
+CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci`, `npm run build` and `npm run build:public`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

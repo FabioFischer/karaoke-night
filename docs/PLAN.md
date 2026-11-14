@@ -7,10 +7,10 @@
 *Last updated: 2026-11-14*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`), waiting for its live run. The beta's web screens (§5.7), the target A7 and A8 build toward.
 - **Next:**
   - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
-  - milestone A7 (search), with results shaped for the §5.7 search list;
+  - the A7 live run (same criterion as S4), then milestone A8;
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -96,6 +96,11 @@ STAGE · Windows machine at the venue
 ### 5.1 Song flow
 
 1. **Search on the TV.** The Stage lists what's already in the library first (marked "ready"), then YouTube Music results (marked "process, ~2 min"). A library screen also lists every ready song.
+   - **Library matches** need no network: a song matches when every word of the query appears in its title or artist, even as part of a longer word, with case and accents ignored (Unicode NFKD without combining marks, then casefold).
+   - **Online results:** up to 10 from `ytmusicapi` (`filter="songs"`, which returns about 20 whatever its limit says, so the Stage keeps the first 10). If it fails or finds nothing, a flat `yt-dlp` search (`ytsearch10:`) takes its place: it lists hits without resolving each video, so it needs no JS runtime, and it has no album and no separate artist, so the channel stands in for the artist.
+   - **No duplicates:** an online result whose `video_id` is already in the library (manifest `source.video_id`) shows once, as the library song, after the songs the words matched, so a typo that misses the library still finds it.
+   - **Without internet** the library matches come back with a notice that the online search failed, never an error.
+   - **Each result** carries the full title, the artist (all of them, joined with ", "), the album, the duration, the largest thumbnail the source gave, the `video_id` (what `POST /jobs` needs, §5.3) and, for a library song, its `song_id`. Missing values stay empty. Library songs have no thumbnail yet (§9, thumbnails offline). `stage search "<text>"` prints them, one line each.
 2. **New song.** The Stage creates a job on the Studio, tracks its progress and downloads the package, with resume and hash checks.
 3. **Setup.** The singer picks the active stems (presets *Karaoke*, *Backing only*, *Original*, or custom) and the key, in semitones. The key can't change once the song starts.
 4. **Start.** The Stage tells REAPER to load the package and play.

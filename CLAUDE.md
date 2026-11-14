@@ -66,6 +66,14 @@ uv run stage list [--library DIR]
 
 `stage sync` mirrors the Studio library: it downloads what is missing or reprocessed, resumes interrupted downloads from `.<song_id>.partial` folders, checks each stem's sha256, and removes what the Studio no longer lists. It refuses to run without `STUDIO_TOKEN`. It prints one line per song acted on (`added`, `updated`, `removed`, `busy`, `failed`) and a summary line, and exits with 1 if the Studio cannot be reached (nothing changes then) or any song failed. A song whose files are open (REAPER holding the loaded song) is reported `busy` and left whole. `stage list` needs no network and no token.
 
+### Searching for a song
+
+```powershell
+uv run stage search "<text>" [--library DIR]
+```
+
+`stage search` lists the library songs whose title or artist holds every word of the text (case and accents ignored), then up to 10 YouTube Music results (`ytmusicapi`, songs only). When YouTube Music fails or finds nothing, the online part comes from a `yt-dlp` search of YouTube instead, with the channel as the artist and no album. A result already in the library shows once, as the library song. Each line holds `ready` or `new`, the title, the artist, the album, the duration and the `video_id` (`-` when missing), plus the `song_id` of a ready song. Without internet it lists the library matches and the line `could not search online; only songs already in the library are listed`. It exits with 0 whenever the library could be read. It needs no token.
+
 ### Playing a song in REAPER
 
 REAPER is the player (`docs/PLAN.md` §5.4). Its one-time setup on the Stage (web interface on port 8080, the listener started from REAPER's `Scripts/__startup.lua`, stop at the end of the project, the session template `reaper/template/karaoke.RPP`) is the checklist in `reaper/README.md`. Then:

@@ -44,10 +44,11 @@ function SessionFollower() {
     const ended = previous.current === 'playing' && current === 'results'
     previous.current = current
     if (current === null) return
+    // Replace, not push: the back button must not lead to a screen the session left.
     if (current === 'results' && (ended || pathname === STAGE) && pathname !== RESULTS) {
-      navigate(RESULTS)
+      navigate(RESULTS, { replace: true })
     } else if (current !== 'results' && pathname === RESULTS) {
-      navigate(STAGE)
+      navigate(STAGE, { replace: true })
     }
   }, [current, pathname, navigate])
 

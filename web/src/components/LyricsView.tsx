@@ -15,6 +15,9 @@ export function LyricsView({ songId, position, duration }: Props) {
   const [error, setError] = useState<ApiError | null>(null)
 
   useEffect(() => {
+    // A new song never shows the lyrics or the error of the previous one.
+    setLyrics(null)
+    setError(null)
     if (songId === null) return
     let cancelled = false
     api

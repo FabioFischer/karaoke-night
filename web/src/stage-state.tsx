@@ -22,21 +22,21 @@ function isStageState(value: unknown): value is StageState {
 export function StageStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StageState | null>(null)
   const [offline, setOffline] = useState(false)
-  // Each request takes a number when it is sent; an answer older than the one
-  // shown is dropped, so a slow poll never undoes an action.
+  // Each poll takes a number when it is sent, and a poll older than the state
+  // shown is dropped. GET /api/state does not wait for an action in flight, so
+  // a poll sent before an action's answer arrived may carry the state before
+  // the action: the answer is always shown and drops every poll sent so far.
   const sent = useRef(0)
   const shown = useRef(0)
-
-  function show(request: number, next: StageState) {
-    if (request <= shown.current) return
-    shown.current = request
-    setState(next)
-  }
 
   async function poll() {
     const request = ++sent.current
     try {
-      show(request, await api.state())
+      const next = await api.state()
+      if (request > shown.current) {
+        shown.current = request
+        setState(next)
+      }
       setOffline(false)
     } catch {
       setOffline(true)
@@ -59,10 +59,13 @@ export function StageStateProvider({ children }: { children: ReactNode }) {
   }, [])
 
   async function perform(call: () => Promise<unknown>) {
-    const request = ++sent.current
     const answer = await call()
-    if (isStageState(answer)) show(request, answer)
-    else await poll()
+    if (isStageState(answer)) {
+      shown.current = sent.current
+      setState(answer)
+    } else {
+      await poll()
+    }
   }
 
   return (

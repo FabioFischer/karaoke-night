@@ -2,8 +2,12 @@ import logging
 from collections.abc import Callable
 
 import pytest
+import requests
+import yt_dlp
 from stage import search
 from stage.search import Result
+from yt_dlp.utils import DownloadError
+from ytmusicapi.exceptions import YTMusicServerError
 
 FIRST = "first-song--first-artist--a1b2c3"
 SECOND = "second-song--second-artist--d4e5f6"
@@ -80,11 +84,15 @@ def unused(query: str) -> list[dict]:
     raise AssertionError("this client should not be called")
 
 
-def offline(query: str) -> list[dict]:
-    raise OSError("no route to host")
+def ytmusic_offline(query: str) -> list[dict]:
+    raise requests.exceptions.ConnectionError("no route to host")
 
 
-def find(query: str, library, ytmusic=offline, ytdlp=offline):
+def ytdlp_offline(query: str) -> list[dict]:
+    raise DownloadError("no route to host")
+
+
+def find(query: str, library, ytmusic=ytmusic_offline, ytdlp=ytdlp_offline):
     return search.find(query, library.path, ytmusic, ytdlp)
 
 
@@ -131,6 +139,23 @@ def test_every_word_must_appear_in_the_title_or_the_artist(local_library) -> Non
     assert song_ids(find("  sec   artist ", local_library)) == [SECOND]
     assert song_ids(find("song", local_library)) == [FIRST, SECOND]
     assert song_ids(find("first missing", local_library)) == []
+
+
+@pytest.mark.parametrize("query", ["", "   ", " \t\n ", "́"])
+def test_a_query_without_words_finds_nothing_and_searches_nothing_online(
+    local_library, query: str
+) -> None:
+    local_library.add(FIRST, "First Song", "First Artist")
+    queries = []
+
+    def client(query: str) -> list[dict]:
+        queries.append(query)
+        return [ytmusic_song("BBBBBBBBBBB")]
+
+    found = find(query, local_library, ytmusic=client, ytdlp=client)
+
+    assert (found.results, found.notice) == ([], None)
+    assert queries == []
 
 
 def test_a_song_from_a_local_file_matches_without_a_video_id(local_library) -> None:
@@ -243,6 +268,24 @@ def test_an_online_result_in_the_library_the_words_missed_joins_the_ready_ones(
     ]
 
 
+def test_an_online_result_without_a_video_id_is_not_a_local_file_song(
+    local_library,
+) -> None:
+    local_library.add(
+        SECOND,
+        "Second Song",
+        "Second Artist",
+        source={"type": "file", "sha256": "0" * 64},
+    )
+    ytmusic = answers([ytmusic_song(None, "First Song")])
+
+    found = find("first", local_library, ytmusic=ytmusic)
+
+    assert [(r.origin, r.song_id, r.video_id) for r in found.results] == [
+        ("ytmusic", None, None)
+    ]
+
+
 def test_youtube_music_gives_at_most_10_results(local_library) -> None:
     ytmusic = answers([ytmusic_song(f"video{n:06d}") for n in range(20)])
 
@@ -292,7 +335,7 @@ def test_the_largest_thumbnail_is_chosen(local_library) -> None:
 
 
 def test_a_youtube_music_failure_falls_back_to_yt_dlp(local_library, caplog) -> None:
-    ytmusic = fails(ConnectionError("music service down"))
+    ytmusic = fails(YTMusicServerError("music service down"))
     ytdlp = answers([ytdlp_video("EEEEEEEEEEE", "Video Title")])
 
     with caplog.at_level(logging.WARNING, logger="stage"):
@@ -383,8 +426,8 @@ def test_when_both_searches_fail_the_library_matches_come_with_a_notice(
         found = find(
             "first",
             local_library,
-            ytmusic=fails(ConnectionError("music service down")),
-            ytdlp=fails(OSError("no route to host")),
+            ytmusic=fails(YTMusicServerError("music service down")),
+            ytdlp=fails(DownloadError("no route to host")),
         )
 
     assert song_ids(found) == [FIRST]
@@ -399,7 +442,10 @@ def test_a_yt_dlp_failure_after_an_empty_youtube_music_answer_gives_the_notice(
     local_library,
 ) -> None:
     found = find(
-        "song", local_library, ytmusic=answers([]), ytdlp=fails(OSError("offline"))
+        "song",
+        local_library,
+        ytmusic=answers([]),
+        ytdlp=fails(DownloadError("offline")),
     )
 
     assert (found.results, found.notice) == ([], search.OFFLINE_NOTICE)
@@ -450,3 +496,26 @@ def test_ytdlp_videos_lists_10_hits_flat_without_downloading(monkeypatch) -> Non
     assert options["extract_flat"] is True
     assert options["quiet"] is True
     assert options["skip_download"] is True
+    assert options["extractor_retries"] == 1
+
+
+def test_ytdlp_videos_keeps_yt_dlp_from_printing(monkeypatch, capfd) -> None:
+    created = []
+
+    class RecordingYoutubeDL(yt_dlp.YoutubeDL):
+        def __init__(self, options: dict) -> None:
+            super().__init__(options)
+            created.append(self)
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            return {"entries": []}
+
+    monkeypatch.setattr(search.yt_dlp, "YoutubeDL", RecordingYoutubeDL)
+    search.ytdlp_videos("song title")
+    [ydl] = created
+
+    ydl.report_warning("a warning")
+    with pytest.raises(DownloadError):
+        ydl.report_error("an error")
+
+    assert capfd.readouterr() == ("", "")

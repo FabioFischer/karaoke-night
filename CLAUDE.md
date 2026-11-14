@@ -72,7 +72,7 @@ uv run stage list [--library DIR]
 uv run stage search "<text>" [--library DIR]
 ```
 
-`stage search` lists the library songs whose title or artist holds every word of the text (case and accents ignored), then up to 10 YouTube Music results (`ytmusicapi`, songs only). When YouTube Music fails or finds nothing, the online part comes from a `yt-dlp` search of YouTube instead, with the channel as the artist and no album. A result already in the library shows once, as the library song. Each line holds `ready` or `new`, the title, the artist, the album, the duration and the `video_id` (`-` when missing), plus the `song_id` of a ready song. Without internet it lists the library matches and the line `could not search online; only songs already in the library are listed`. It exits with 0 whenever the library could be read. It needs no token.
+`stage search` lists the library songs whose title or artist holds every word of the text (case and accents ignored), then up to 10 YouTube Music results (`ytmusicapi`, songs only). When YouTube Music fails or finds nothing, the online part comes from a `yt-dlp` search of YouTube instead, with the channel as the artist and no album. A result already in the library shows once, as the library song. Each line holds `ready` or `new`, the title, the artist, the album, the duration and the `video_id` (`-` when missing), plus the `song_id` of a ready song. Without internet it lists the library matches and the line `could not search online; only songs already in the library are listed`. Text without words prints `no results for '<text>'` and searches nothing online. It exits with 0 whenever the library could be read. It needs no token.
 
 ### Playing a song in REAPER
 

@@ -51,7 +51,8 @@ class Found:
 
 
 def ytmusic_songs(query: str) -> list[dict]:
-    # Returns about 20 results whatever its limit says.
+    # Its limit only stops further pages: the first page can hold more
+    # results than asked for, so find keeps the first ONLINE_LIMIT.
     return YTMusic().search(query, filter="songs")
 
 
@@ -75,6 +76,7 @@ def ytdlp_videos(query: str) -> list[dict]:
         "extract_flat": True,
         "quiet": True,
         "skip_download": True,
+        "extractor_retries": 1,
         "logger": _Silent(),
     }
     with yt_dlp.YoutubeDL(options) as ydl:
@@ -86,13 +88,17 @@ def find(query: str, library: Path, ytmusic: Client, ytdlp: Client) -> Found:
     """Library matches first, then up to ONLINE_LIMIT online results.
 
     An online result already in the library shows as its library entry,
-    after the songs the words matched. If both online searches fail, the
-    library matches come back with OFFLINE_NOTICE.
+    after the songs the words matched. yt-dlp runs only when YouTube Music
+    fails or finds nothing; if yt-dlp then fails, the library matches come
+    back with OFFLINE_NOTICE. A query without words finds nothing and searches
+    nothing online.
     """
+    words = _normalize(query).split()
+    if not words:
+        return Found([])
     entries = [
         _from_library(song_id, song) for song_id, song in lib.scan(library).items()
     ]
-    words = _normalize(query).split()
     ready = [entry for entry in entries if _matches(words, entry)]
     by_video_id = {entry.video_id: entry for entry in entries if entry.video_id}
 

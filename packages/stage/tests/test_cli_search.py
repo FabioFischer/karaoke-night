@@ -1,19 +1,25 @@
 import pytest
+import requests
 from stage import cli, search
+from yt_dlp.utils import DownloadError
 
 FIRST = "first-song--first-artist--a1b2c3"
 SECOND = "second-song--second-artist--d4e5f6"
 
 
-def offline(query: str) -> list[dict]:
-    raise OSError("no route to host")
+def ytmusic_offline(query: str) -> list[dict]:
+    raise requests.exceptions.ConnectionError("no route to host")
+
+
+def ytdlp_offline(query: str) -> list[dict]:
+    raise DownloadError("no route to host")
 
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch) -> None:
     """Both online searches fail unless a test answers for them."""
-    monkeypatch.setattr(search, "ytmusic_songs", offline)
-    monkeypatch.setattr(search, "ytdlp_videos", offline)
+    monkeypatch.setattr(search, "ytmusic_songs", ytmusic_offline)
+    monkeypatch.setattr(search, "ytdlp_videos", ytdlp_offline)
 
 
 def answer(monkeypatch, client: str, results: list[dict]) -> None:
@@ -132,6 +138,17 @@ def test_search_with_no_result_and_no_internet_gives_both_lines(
         "no results for 'song'",
         "could not search online; only songs already in the library are listed",
     ]
+
+
+@pytest.mark.parametrize("query", ["", "   "])
+def test_search_without_words_says_no_results_and_nothing_else(
+    local_library, capsys, query: str
+) -> None:
+    local_library.add(FIRST, "First Song", "First Artist")
+
+    assert stage_search(query, local_library) == 0
+
+    assert capsys.readouterr() == (f"no results for {query!r}\n", "")
 
 
 def test_search_uses_the_library_in_the_current_folder_by_default(

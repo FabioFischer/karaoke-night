@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,13 @@ class Server:
         self.started.append((host, port))
         if self.use is not None:
             self.result = self.use(TestClient(app))
+
+
+@pytest.fixture(autouse=True)
+def no_store_variables(monkeypatch) -> None:
+    """A test never reaches a real store, whatever the machine's environment."""
+    monkeypatch.delenv("KARAOKE_STORE_URL", raising=False)
+    monkeypatch.delenv("KARAOKE_STORE_TOKEN", raising=False)
 
 
 @pytest.fixture
@@ -100,3 +108,64 @@ def test_the_default_web_folder_is_web_dist_in_the_current_folder(
     cli.main(["serve"])
 
     assert server.result == "<title>index</title>"
+
+
+NO_STORE = (
+    "stage serve: no public store (the KARAOKE_STORE_URL and KARAOKE_STORE_TOKEN "
+    "environment variables); nothing is published and no public request is read"
+)
+
+
+def no_store_expected(url: str, token: str):
+    raise AssertionError("no store expected")
+
+
+@pytest.mark.parametrize(
+    "variables",
+    [{}, {"KARAOKE_STORE_URL": "https://store.invalid"}, {"KARAOKE_STORE_TOKEN": "t"}],
+)
+def test_serve_without_both_store_variables_says_so_and_publishes_nothing(
+    server, monkeypatch, capsys, tmp_path: Path, variables
+) -> None:
+    for name, value in variables.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(cli, "Store", no_store_expected)
+
+    assert cli.main(["serve", "--library", str(tmp_path)]) == 0
+
+    assert NO_STORE in capsys.readouterr().err
+
+
+def test_serve_with_a_store_publishes_and_clears_the_requests(
+    server, store, packages, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("KARAOKE_STORE_URL", "https://store.invalid")
+    monkeypatch.setenv("KARAOKE_STORE_TOKEN", "test-store-token")
+    made: list[tuple[str, str]] = []
+
+    def make_store(url: str, token: str):
+        made.append((url, token))
+        return store.client()
+
+    monkeypatch.setattr(cli, "Store", make_store)
+    packages.add(SONG)
+    store.lists["karaoke:requests"] = ["left from before"]
+
+    def wait_for_the_store(client) -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            published = {"karaoke:snapshot", "karaoke:library"} <= set(store.values)
+            if published and "DEL" in store.names():
+                return
+            time.sleep(0.01)
+
+    server.use = wait_for_the_store
+
+    assert cli.main(["serve", "--library", str(packages.path)]) == 0
+
+    assert made == [("https://store.invalid", "test-store-token")]
+    assert store.json("karaoke:snapshot")["session"]["state"] == "setup"
+    songs = store.json("karaoke:library")["songs"]
+    assert [song["song_id"] for song in songs] == [SONG]
+    assert "karaoke:requests" not in store.lists
+    assert "no public store" not in capsys.readouterr().err

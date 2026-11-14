@@ -17,6 +17,9 @@ library/
 # REAPER peak caches
 *.reapeaks
 
+# Studio server log (scripts/studio-start.ps1)
+studio-serve.log
+
 # Python bytecode
 __pycache__/
 

@@ -7,10 +7,9 @@
 *Last updated: 2026-11-14*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`), waiting for its live run. The beta's web screens (§5.7), the target A7 and A8 build toward.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
 - **Next:**
   - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
-  - the A8a live run: `stage serve` against REAPER and the Studio;
   - milestone A8b (the TV screens on the §5.7 routes, over the §5.8 API);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
@@ -472,6 +471,12 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 - **Without internet** (simulated with a dead proxy): the library matches and the notice, exit 0. It took 19.3 s, 16.5 s of it yt-dlp retrying on its own; with `extractor_retries` at 1 it takes 11.2 s (about 2 s ytmusicapi, 8 s yt-dlp). A network that hangs instead of refusing was not measured.
 - **Blank text** (empty or only spaces) searches nothing: before the fix it called both sources, which failed on it and printed the offline notice with internet up, and yt-dlp returned unrelated videos for spaces.
 - **Fields:** ytmusicapi returned 20 to 29 songs per query whatever its limit says, with thumbnails of 60 and 120 px only, and some songs without an album; yt-dlp entries have no album and the channel stands in for the artist, with thumbnails up to 720 px.
+
+**A8a (2026-11-14): pass.** `stage serve` on the Stage, against the Studio over Tailscale and REAPER 7.85 with the session template.
+
+- **Studio:** adding a song the Studio already held went `queued` → `fetching` (0 to 8 files) → `ready` in 11.7 s, into an empty library. Removed after 2 of its stems, the entry left the playlist and its download stopped, the partial folder kept. With the Studio unreachable, an added song stayed `queued` with the `studio_unreachable` warning instead of failing.
+- **REAPER, driven only through the API:** a 2:19 song with the lead muted and the key at +2 started in 0.95 s and played to its end; the session moved to `results` on its own when REAPER stopped. "Next now" played the next song with the lead still muted and the key back to 0; a stop through the API about 20 s in moved the session to `results` and left REAPER stopped; "setup next" with an empty playlist went back to `setup`. By ear: lead silent in both, the first song higher, the second in its original key, no crackle or dropout on the mic.
+- **Routes:** a reload of `/karaoke/stage/results` served the web, an unknown `/api` path answered 404 and a GET on a POST route 405, both as `{error, detail}`.
 
 ### Phase 2: beta
 

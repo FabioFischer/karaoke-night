@@ -18,6 +18,11 @@ the library can be added.
 .PARAMETER TokenFile
 A file holding the Studio token. stage serve gets it as STUDIO_TOKEN.
 
+.PARAMETER StoreFile
+A file holding the public store's REST URL on its first line and its token on
+the second. stage serve gets them as KARAOKE_STORE_URL and KARAOKE_STORE_TOKEN
+and publishes to the public page. Without it, the public page gets nothing.
+
 .PARAMETER Library
 The library folder (default: library, in the clone).
 
@@ -29,6 +34,7 @@ param(
     [string]$Project,
     [string]$Studio,
     [string]$TokenFile,
+    [string]$StoreFile,
     [string]$Library,
     [int]$Port = 8791,
     [string]$ReaperPath = 'C:\Program Files\REAPER (x64)\reaper.exe',
@@ -80,10 +86,20 @@ if ($TokenFile) {
     # An empty file leaves it unset, and stage serve runs without a Studio.
     $env:STUDIO_TOKEN = "$(Get-Content -Raw -LiteralPath $TokenFile)".Trim()
 }
+if ($StoreFile) {
+    # Set only while stage serve starts, as the Studio token is. A missing line
+    # leaves its variable unset, and stage serve publishes nothing.
+    $storeLines = @(Get-Content -LiteralPath $StoreFile)
+    $env:KARAOKE_STORE_URL = "$($storeLines[0])".Trim()
+    $env:KARAOKE_STORE_TOKEN = "$($storeLines[1])".Trim()
+}
 Write-Host "Starting stage serve on port $Port in its own window (close it to stop the server)"
 $server = Start-Process -FilePath $stageExe -ArgumentList $serveArguments -WorkingDirectory $clone -PassThru
 if ($TokenFile) {
     Remove-Item Env:STUDIO_TOKEN -ErrorAction SilentlyContinue
+}
+if ($StoreFile) {
+    Remove-Item Env:KARAOKE_STORE_URL, Env:KARAOKE_STORE_TOKEN -ErrorAction SilentlyContinue
 }
 
 Write-Host "Waiting for the Stage at $stageUrl"

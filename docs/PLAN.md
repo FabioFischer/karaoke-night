@@ -238,7 +238,7 @@ The folder is the library: one package per folder, named by its song id, as in �
 
 The beta's screens, as the maintainer laid them out on 2026-11-14. They are not built yet. A7 and A8 use the same routes, data and session model, so the beta adds to the alpha screens instead of replacing them. A product version beyond the beta would be redesigned.
 
-Every screen shares one **playlist**: the songs lined up for the night, in order, the first one being the current song. An entry not yet in the Stage library shows its processing state (the Studio job of §5.3, then the Stage's download).
+Every screen shares one **playlist**: the songs lined up for the night, in order, the first one being the current song. It lives in the Stage's memory while the service runs; a restart starts with an empty playlist. An entry not yet in the Stage library shows its processing state (the Studio job of §5.3, then the Stage's download).
 
 | Route | Screen |
 |---|---|
@@ -255,7 +255,7 @@ Every screen shares one **playlist**: the songs lined up for the night, in order
 **Stage mode (`/karaoke/stage`), before the song starts**
 
 - A progress bar while the current song is not ready on the Stage yet.
-- The song's setup: music volume against mic volume, stems to mute (lead muted by default), key up or down, pitch correction on or off and its strength.
+- The song's setup: music volume against mic volume, stems to mute (lead muted by default), and key up or down. Pitch correction stays in REAPER, by hand (§3).
 - A prominent button to start the song.
 - The playlist in a bar at the bottom, with reorder, remove, the processing state of each and a skip to the next song.
 
@@ -271,10 +271,10 @@ Every screen shares one **playlist**: the songs lined up for the night, in order
 
 **What the screens need from the Stage**, beyond what the alpha has:
 
-- `Player` gains `pause` (REAPER action 1008) and track volume (`/_/SET/TRACK/{i}/VOL/{v}`, on the `Music` folder for the music and on the mic tracks for the voice). Neither is tried live yet. Skip is a stop the Stage asks for, so it is not an end of song (§5.4), followed by the next `load`.
+- `Player` gains `pause` (REAPER action 1008) and track volume (`/_/SET/TRACK/{i}/VOL/{v}`, on the `Music` folder for the music and on the mic tracks for the voice). Neither is tried live yet. Skip is a stop the Stage asks for, so it is not an end of song (§5.4), followed by the next `load`. `play()` goes to the start before it plays, so resuming after a pause must not call it: REAPER's pause action toggles, and A6 saw a second press resume playback.
 - Fetching one song on demand (a Studio job, then the download of that one package), next to the full mirror of `stage sync`.
 - Search results that carry the thumbnail and the `video_id` the job needs.
-- Still open (§9): how the app drives pitch correction, the preview of the original, thumbnails offline, which settings carry over to the next song, and where the playlist lives.
+- Still open (§9): the preview of the original, thumbnails offline, and which settings carry over to the next song.
 
 ---
 
@@ -381,7 +381,7 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 The alpha is a test run, not a finished event. The TV mirrors the Stage screen (over HDMI or screen casting) and is driven with the Stage's keyboard and mouse. The first night (A9) has no queue of participants: songs are picked at the Stage. Public access to the queue and the playlist comes after it, in A10.
 
-A7 and A8 already follow the beta screens (§5.7): the same routes, search results with the fields the beta shows, and a session built around a playlist. What they leave out waits for the beta: the preview, volumes, pause, pitch correction, reordering and the results report.
+A7 and A8 already follow the beta screens (§5.7): the same routes, search results with the fields the beta shows, and a session built around a playlist. What they leave out waits for the beta: the preview, volumes, pause, reordering and the results report.
 
 | Milestone | Deliverable | Done when |
 |---|---|---|
@@ -429,7 +429,7 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 
 ### Phase 2: beta
 
-The beta's screens are in §5.7; the items below fill them in (pitch correction strength comes with item 3, the results report with item 7).
+The beta's screens are in §5.7; the items below fill them in (the results report comes with item 7).
 
 Proposed order:
 
@@ -482,8 +482,7 @@ Proposed order:
 - [ ] Loudness target between songs (LUFS)
 - [ ] Hardware recommendations confirmed (from S1 and sound tests)
 - [ ] Public access (A10): what runs on Vercel, and how it reaches the Studio, which keeps the separation (GPU, jobs of minutes, `yt-dlp` with deno)
-- [ ] Pitch correction from the app (§5.7): the setup turns it on or off and sets its strength, while §3 leaves the effects chain to REAPER and the app never picks plugins. How the app finds the plugin and the parameter to drive.
 - [ ] Preview of the original (§5.7): where the audio comes from for a search result (a stream URL from `yt-dlp`, which needs deno on the Stage, or YouTube's own player), and how the browser's sound reaches the speakers while REAPER holds the interface through ASIO. A library song has no original file, only stems that add up to it.
 - [ ] Thumbnails offline (§5.7): the library screen needs them without internet, so they travel in the package (a manifest change) or get cached on the Stage.
-- [ ] Settings carried to the next song (§5.7, results): which of volumes, mutes, key and pitch correction carry over.
-- [ ] Where the playlist lives: in memory on the Stage or saved across restarts, and how A10's public access reaches it.
+- [ ] Settings carried to the next song (§5.7, results): which of volumes, mutes and key carry over.
+- [x] Where the playlist lives: in the Stage's memory while the service runs (§5.7). How A10's public access reaches it belongs to the A10 decision above.

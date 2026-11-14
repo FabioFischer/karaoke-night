@@ -117,6 +117,47 @@ def library(tmp_path: Path) -> Path:
     return tmp_path / "stage"
 
 
+class LocalLibrary:
+    """A Stage library folder of packages that hold only their manifest."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def add(
+        self,
+        song_id: str,
+        title: str,
+        artist: str,
+        *,
+        video_id: str = "XXXXXXXXXXX",
+        source: dict | None = None,
+        duration_s: float = 245.3,
+    ) -> str:
+        package = self.path / song_id
+        package.mkdir(parents=True)
+        manifest = {
+            "schema": 1,
+            "pipeline_version": 1,
+            "id": song_id,
+            "title": title,
+            "artist": artist,
+            "duration_s": duration_s,
+            "source": source or {"type": "youtube_music", "video_id": video_id},
+            "gain_db": -2.5,
+            "stems": {},
+            "models": {"vocals": "a", "karaoke": "b", "instrumental": "c"},
+            "created_at": CREATED_AT,
+        }
+        (package / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return song_id
+
+
+@pytest.fixture
+def local_library(tmp_path: Path) -> LocalLibrary:
+    """An empty Stage library, not created until a song is added."""
+    return LocalLibrary(tmp_path / "library")
+
+
 @pytest.fixture
 def refuse_rename(monkeypatch):
     """refuse_rename(*names): Path.rename of those folders fails like Windows

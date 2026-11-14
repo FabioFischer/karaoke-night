@@ -7,9 +7,10 @@
 *Last updated: 2026-11-13*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1).
 - **Next:**
-  - milestone A6 (REAPER bridge);
+  - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
+  - milestone A7 (search);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -61,7 +62,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 
    With every stem on, you hear the original recording without separation artifacts. The goal is to get as close to the original as possible, not bit-exact: writing each stem to 16-bit FLAC adds tiny differences, which are accepted. Tests compare against the original within a tolerance.
 3. **Song packages are immutable and versioned** (`pipeline_version`). When a better model comes out, the library gets reprocessed.
-4. **The player sits behind an interface.** Stage code talks to a `Player` interface (`load`, `play`, `stop`, `set_mute`, `transpose`, `position`), and REAPER is just one implementation of it. This leaves room to replace REAPER later.
+4. **The player sits behind an interface.** Stage code talks to a `Player` interface (`load`, `play`, `stop`, `set_mute`, `transpose`, `position`, `ended`), and REAPER is just one implementation of it (`ReaperPlayer`, in `packages/stage/src/stage/player.py`). This leaves room to replace REAPER later.
 5. **REAPER owns the audio.** The app never opens the audio device.
 
 ## 5. Architecture
@@ -175,16 +176,22 @@ FastAPI, started with `studio serve` (`--host` defaults to `0.0.0.0`, `--port` t
 | `/_/SET/TRACK/{i}/MUTE/{0\|1}` | Turns a stem on or off. |
 | `/_/1007`, `/_/1016`, `/_/40042` | Play, stop, and go to the start of the project. |
 
-**Lua listener**, for anything the web interface doesn't cover. It runs in a `defer` loop, started by `__startup.lua` when REAPER opens.
+`play` sends `40042` then `1007`, so a song always plays from its start. `load` sends `1016` before the listener command, so stems never land under a moving cursor with the previous song's mutes and key. The Stage builds the name → index map from `TRACK` when it connects and again after each `load` (which can create tracks), lowercase as the listener matches names, skipping the master (index 0); of two tracks with one name, the first wins.
+
+**Lua listener** (`reaper/scripts/karaoke_listener.lua`), for anything the web interface doesn't cover. It runs in a `defer` loop, started when REAPER opens by one line in `Scripts/__startup.lua` of REAPER's resource folder: `dofile([[<clone>\reaper\scripts\karaoke_listener.lua]])`. It finds its own folder (for `lib/json.lua`) from the source of its own chunk (`debug.getinfo(1, "S").source`), which names the listener file both under `dofile` and when it runs as an action; the action context would name `__startup.lua`. Setup steps: `reaper/README.md`.
 
 - **Request:** the Stage sets `SET/EXTSTATE/karaoke/cmd/<URL-encoded JSON>`, for example `{"id": 42, "op": "load", "manifest": "C:\\...\\manifest.json"}`.
-- **Reply:** the listener runs the command and writes `{"id": 42, "ok": true}` to `karaoke/ack`. The Stage reads it with `GET/EXTSTATE/karaoke/ack` and matches the `id`.
-- **One command at a time:** `cmd` and `ack` are single slots, so the Stage sends the next command only after the previous ack.
-- **Operations:**
-  - `load`: removes the previous song's items, inserts each stem on the track of the same name and applies `gain_db`. The project end follows the stems, as long as nothing else on the timeline runs longer (an item left on a mic track would).
+- **Reply:** the listener runs the command and writes `{"id": 42, "op": "load", "ok": true, "ms": 12.3}` (or `"ok": false, "error": "…"`) to `karaoke/ack`. The Stage reads it with `GET/EXTSTATE/karaoke/ack` and matches the `id`; an ack with another id (the previous command's) is skipped. `GET/EXTSTATE` escapes newlines, tabs and backslashes as `\n`, `\t` and `\\`, decoded in one pass. A command the listener cannot decode gets `"ok": false` and an error, with its `id` when one can still be read, and the listener keeps running.
+- **One command at a time:** `cmd` and `ack` are single slots, so the Stage sends the next command only after the previous ack. With no matching ack within 5 s, the Stage reports that the listener did not answer and says to restart it (S3 round 2 saw it stop answering once).
+- **Operations:** `load`, `transpose`, `ping` (an empty round trip) and `quit` (stops the listener).
+  - `load`: removes the previous song's items, inserts each stem on the track of the same name (creating the missing ones at the end, with input monitoring off) and applies `gain_db`. The project end follows the stems, as long as nothing else on the timeline runs longer (an item left on a mic track would).
   - `transpose`: shifts the key on every stem **except drums**. Drums have no key, and pitch shifting only degrades them. It is sent at setup, before playback starts.
 
-**Session template:** "stop playback at end of project" is enabled, the mic tracks are armed with input monitoring on, and the stem tracks have input monitoring off (tracks created with REAPER's defaults inherit the user's default, which can be on). The effects chain on the mic tracks is left to the person running REAPER (§3).
+**Session template** (`reaper/template/karaoke.RPP`, hand-written; REAPER fills in the rest with its defaults): project sample rate 44.1 kHz; `Mic 1` and `Mic 2` on mono inputs 1 and 2, armed, with input monitoring on; then the folder track `Music`, its fader at -8 dB, holding `Lead`, `Backing`, `Drums`, `Bass`, `Guitar`, `Piano` and `Other`, not armed, with input monitoring off. The stems are normalized close to full scale (§5.2, `gain_db`), so without that headroom the voice on top clips the master; the -8 dB is a starting point until a loudness target is chosen (§9). The listener finds the stem tracks by name, inside the folder or not; a stem track it has to create goes at the end of the track list, outside the folder and without its -8 dB, so a session must keep all 7 (a track created with REAPER's defaults inherits the user's default, which can be on, so the listener turns it off on the stem tracks it creates). No effects anywhere: the effects chain on the mic tracks is left to the person running REAPER (§3), and its guide comes from a guided test. "Stop/repeat playback at end of project" is a REAPER preference, not part of the project, so it is in the setup checklist of `reaper/README.md`.
+
+**End of song**, to be confirmed live: the song has ended when playback goes from not stopped (playing, paused, recording or record paused) to stopped (playstate 0) without the Stage asking to stop. A stop made by hand in REAPER counts as the end too, paused or not; a pause does not, so `stage play` keeps following the song and goes on when playback resumes. How REAPER reports the stop at the end of the project (the position and playstate right at the stop) is not measured yet, so the manifest's `duration_s` plays no part in the rule, which lives in one function (`song_ended` in `player.py`).
+
+**`stage play <song_id>`** (`--library DIR`, `--mute STEM ...`, `--transpose N`) loads a song of the library, mutes the stems given and unmutes every other one (so the previous song's mutes do not stay), sends the transpose (0 by default), plays from the start and prints the position once per second of the song, one line each, until the song ends (exit 0). Ctrl+C stops playback and exits 130. An unknown song id, an unreachable REAPER, a listener that does not answer and a failed command exit 1; an unknown stem in `--mute` is a usage error (exit 2) that lists the song's stems.
 
 ### 5.5 Repository layout
 
@@ -202,8 +209,9 @@ karaoke-night/
 │  └─ stage/                    # Stage: local server, library, REAPER bridge, session
 ├─ web/                         # React + Vite + TS: TV screen (in the beta, also the phone page)
 ├─ reaper/
-│  ├─ scripts/                  # __startup.lua, karaoke_listener.lua, lib/json.lua
-│  └─ template/                 # base session (.RPP) + effects chain guide
+│  ├─ README.md                 # setup checklist, effects chain guide
+│  ├─ scripts/                  # karaoke_listener.lua, lib/json.lua
+│  └─ template/                 # base session (karaoke.RPP)
 └─ .github/workflows/ci.yml     # ruff + pytest + tsc
 ```
 
@@ -335,7 +343,7 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A3 | Studio pipeline CLI: `studio process <url\|file>` produces a complete package. | All 20 test songs are processed, and their stems add up to the original. |
 | A4 | Studio API (§5.3): FastAPI with jobs, library, files and deletion, started with `studio serve`. | The Stage creates a job and downloads the package over Tailscale. |
 | A5 | Stage library (§5.6): the folder of packages, with no SQLite (it comes with the play history), resumable downloads with hash checks, and `stage sync`, which mirrors the Studio library (adds, updates and removes), plus `stage list`. | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
-| A6 | REAPER bridge: session template (pitch correction in chromatic mode), Lua listener, and the Python `Player` (load, play, stop, mute, transpose, position, end of song). | A song plays from start to end driven only by the Stage. |
+| A6 | REAPER bridge: session template (mic and stem tracks, no effects), Lua listener, the Python `Player` (load, play, stop, mute, transpose, position, end of song) and `stage play`. The pitch correction is no longer in the template: the effects chain guide comes from a guided test of pitch correction options. | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
 | A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
 | A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). The Studio API starts on its own with the Studio machine, with its permanent firewall rule. | A full karaoke test session at the venue. |
@@ -362,6 +370,15 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 - **Add, update, remove:** a temporary package (a copy of one song under another id) was added on the next sync (130.1 MB in 35.3 s), and downloaded again as `updated` once its `created_at` changed on the Studio. With that package loaded in REAPER, deleting it on the Studio and syncing reported it `busy` and kept it whole (exit 0); after REAPER loaded another song, the next sync removed it. No dot folder was left on either machine.
 - **No internet:** with the Stage's Wi-Fi off (internet and Studio both unreachable), `stage list` listed the library and a synced song loaded in REAPER with the S3 listener (95 ms round trip) and played: all stems sounded right, with no dropouts.
 - **For A6:** the stem tracks of the session used for the test still had input monitoring on, as S3 noted; the A6 template sets it off.
+
+**A6 (2026-11-13): pass.** REAPER 7.85 on the Stage, the listener started by `__startup.lua`, the session opened from `reaper/template/karaoke.RPP` with no warning: the mic tracks armed and monitoring, the stem tracks not.
+
+- **Start to end, driven by the Stage:** `stage play` of the shortest test song (2:19) with the lead muted loaded it (load acks of 95 to 124 ms), followed it second by second and printed "the song ended" with exit 0 when REAPER stopped at the end of the project.
+- **How REAPER reports the end:** a 50 ms poll of `TRANSPORT` showed playing (1), paused (2) at the pause button, playing (1) again when it was pressed again, with no stopped state in between, and stopped (0) at the end. At the end the position goes back to where playback last started (31.32 s after a resume there), not to the end of the song, so the rule cannot rest on the duration; "stopped without the Stage asking" is the rule, and a stop by hand (the space bar is play/stop in REAPER) ends the song too. Ctrl+C in a console stopped playback and exited 130.
+- **Listener:** a malformed command got an error ack with its id, and a command with no readable id an error ack without one; the next `ping` answered. A stem track the listener created came with input monitoring off. During the test the S3 listener, started by hand from the action list, was still running next to the startup one and was the one a malformed command killed: start the listener only from `__startup.lua`.
+- **Headroom:** the stems come close to full scale, so the voice on top was quiet, and clipped once raised. The template now holds the stems in a `Music` folder track at -8 dB, which left room for the voice and gives the music one fader.
+- **Input monitoring crackled** on battery until the buffer went up to 512 samples (S1 ran clean at 128 plugged in); repeating it plugged in is pending.
+- **Pitch correction,** the guided test for the effects chain guide (`reaper/README.md`): Graillon 3 Free corrected well but added about 26 ms (from about 30 to about 56 ms round trip at 512 samples), uncomfortable at that buffer; ReaTune added about 7000 samples and is not usable live.
 
 ### Phase 2: beta
 

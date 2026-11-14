@@ -66,4 +66,14 @@ uv run stage list [--library DIR]
 
 `stage sync` mirrors the Studio library: it downloads what is missing or reprocessed, resumes interrupted downloads from `.<song_id>.partial` folders, checks each stem's sha256, and removes what the Studio no longer lists. It refuses to run without `STUDIO_TOKEN`. It prints one line per song acted on (`added`, `updated`, `removed`, `busy`, `failed`) and a summary line, and exits with 1 if the Studio cannot be reached (nothing changes then) or any song failed. A song whose files are open (REAPER holding the loaded song) is reported `busy` and left whole. `stage list` needs no network and no token.
 
+### Playing a song in REAPER
+
+REAPER is the player (`docs/PLAN.md` §5.4). Its one-time setup on the Stage (web interface on port 8080, the listener started from REAPER's `Scripts/__startup.lua`, stop at the end of the project, the session template `reaper/template/karaoke.RPP`) is the checklist in `reaper/README.md`. Then:
+
+```powershell
+uv run stage play <song_id> [--library DIR] [--mute STEM ...] [--transpose N]
+```
+
+`stage play` loads the song in REAPER, mutes the stems given and unmutes the others, shifts every stem except drums by `--transpose` semitones (0 by default), plays from the start and prints the position once per second until the song ends (exit 0). Ctrl+C stops playback and exits 130. It exits with 1 when the song is not in the library, REAPER cannot be reached or the listener does not answer (restart it then, as the error says). There is no Lua interpreter in CI: the listener and the template are proven only in a live REAPER.
+
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

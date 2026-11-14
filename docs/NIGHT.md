@@ -17,7 +17,7 @@ On the **Studio**, in an administrator PowerShell or over SSH:
    powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\karaoke-night\scripts\studio-start.ps1 -TokenFile C:\path\to\studio-token.txt
    ```
 
-   It creates the firewall rule `karaoke-studio` (inbound TCP on the port, Tailscale only) when it is missing, then starts `studio serve` detached, so it keeps running after the SSH session ends. It prints the process id and the log file (`studio-serve.log` in the clone unless `-LogFile` says otherwise). Run again while the server runs, it starts nothing.
+   It creates the firewall rule `karaoke-studio` (inbound TCP on the port, Tailscale only) when it is missing, then starts `studio serve` detached, so it keeps running after the SSH session ends. It prints the process id and the log file (`studio-serve.log` in the clone unless `-LogFile` says otherwise). If the server stops within its first seconds (a token file that is empty, the separation extra missing, the port in use), it says so with the end of the log and exits 1. Run again while the server runs, it starts nothing. Outside an elevated session it refuses to run, and so does `studio-stop`.
 
 On the **Stage**, in a PowerShell in the clone:
 

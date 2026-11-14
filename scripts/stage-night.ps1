@@ -77,12 +77,13 @@ if ($Studio) {
 }
 if ($TokenFile) {
     # Set only while stage serve starts, so the browser opened next does not inherit it.
-    $env:STUDIO_TOKEN = (Get-Content -Raw -LiteralPath $TokenFile).Trim()
+    # An empty file leaves it unset, and stage serve runs without a Studio.
+    $env:STUDIO_TOKEN = "$(Get-Content -Raw -LiteralPath $TokenFile)".Trim()
 }
 Write-Host "Starting stage serve on port $Port in its own window (close it to stop the server)"
 $server = Start-Process -FilePath $stageExe -ArgumentList $serveArguments -WorkingDirectory $clone -PassThru
 if ($TokenFile) {
-    Remove-Item Env:STUDIO_TOKEN
+    Remove-Item Env:STUDIO_TOKEN -ErrorAction SilentlyContinue
 }
 
 Write-Host "Waiting for the Stage at $stageUrl"

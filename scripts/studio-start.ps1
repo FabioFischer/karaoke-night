@@ -6,7 +6,8 @@ Starts the Studio API for an event: the firewall rule, then studio serve, detach
 Run on the Studio in an administrator PowerShell, by hand or over SSH. It creates
 the inbound firewall rule karaoke-studio (TCP on -Port, Tailscale only) when it is
 missing, then starts this clone's studio serve detached from the session, so it
-keeps running after an SSH session ends. Its output goes to -LogFile. Does nothing
+keeps running after an SSH session ends. Its output goes to -LogFile, whose end is
+shown when the server stops within its first seconds. Does nothing
 when a studio serve of this clone is already running: a second one would remove
 the first one's builds in flight. scripts/studio-stop.ps1 stops it.
 
@@ -25,6 +26,9 @@ The port of studio serve and of the firewall rule (default: 8790).
 .PARAMETER LogFile
 Where studio serve's output is appended (default: studio-serve.log, in the clone).
 #>
+# Without elevation, the command lines of elevated processes read as empty, and a
+# running server would go unseen.
+#Requires -RunAsAdministrator
 param(
     [Parameter(Mandatory = $true)]
     [string]$TokenFile,
@@ -47,11 +51,8 @@ function Format-Literal([string]$value) {
 $clone = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $studioExe = Join-Path $clone '.venv\Scripts\studio.exe'
 
-$running = @(Get-CimInstance Win32_Process | Where-Object {
-    $_.CommandLine -and
-    $_.CommandLine.IndexOf($studioExe, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-    $_.CommandLine.Contains(' serve')
-})
+$serverPattern = [regex]::Escape($studioExe) + '[''"]?\s+serve(\s|$)'
+$running = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match $serverPattern })
 if ($running) {
     Write-Host "studio serve of this clone is already running (PID $($running.ProcessId -join ', ')); nothing started."
     Write-Host 'Stop it first with scripts\studio-stop.ps1 to start it again.'
@@ -95,6 +96,17 @@ $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Argument
 }
 if ($result.ReturnValue -ne 0) {
     Write-Host "Could not start studio serve (Win32_Process.Create returned $($result.ReturnValue))."
+    exit 1
+}
+
+# A server that fails at start (no token, the separation extra missing, the port in
+# use) ends within seconds, and only its log says why.
+Start-Sleep -Seconds 5
+if (-not (Get-Process -Id $result.ProcessId -ErrorAction SilentlyContinue)) {
+    Write-Host "studio serve stopped right after starting. The end of its log ($LogFile):"
+    if (Test-Path -LiteralPath $LogFile) {
+        Get-Content -LiteralPath $LogFile -Tail 20 -Encoding UTF8 | ForEach-Object { Write-Host "  $_" }
+    }
     exit 1
 }
 Write-Host "Started studio serve on port $Port (PID $($result.ProcessId)), detached."

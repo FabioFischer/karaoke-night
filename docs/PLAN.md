@@ -1,16 +1,16 @@
 # Karaoke Night: plan
 
-> v0.3 · 2026-11-10 · Living document: update it whenever a decision changes.
+> v0.4 · 2026-11-14 · Living document: update it whenever a decision changes.
 
 ## Status
 
-*Last updated: 2026-11-13*
+*Last updated: 2026-11-14*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
 - **Next:**
   - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
-  - milestone A7 (search);
+  - milestone A7 (search), with results shaped for the §5.7 search list;
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -49,6 +49,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Library sync | The Studio is the source of truth. The Stage mirrors the whole Studio library: it downloads what is missing and removes what the Studio no longer lists. Deleting a song means deleting it on the Studio. | Simple, and a song deleted by hand doesn't come back on the next sync. Disk use gets revisited if it becomes a problem. |
 | Song identity | A song is identified by its source (the YouTube `video_id`). The same song from different uploads may end up duplicated, and is deleted by hand if needed. | Simple enough for now. |
 | Studio availability | The Studio stays on during sessions. | New songs can be processed during the night. |
+| Web screens | Three routes around one shared playlist: `/karaoke` (home), `/karaoke/stage` (setup and the song playing) and `/karaoke/stage/results` (§5.7). This is the beta's target; the alpha screens use the same routes and grow into it. A product version would be redesigned. | The beta's flow is known now, so the alpha screens don't have to be rewritten for it. |
 | Workflow | One PR per milestone. | Small, reviewable changes. |
 | License | MIT, to be revisited if the app matures into a product. | Simple and permissive, and every dependency is permissive too. |
 
@@ -99,7 +100,9 @@ STAGE · Windows machine at the venue
 3. **Setup.** The singer picks the active stems (presets *Karaoke*, *Backing only*, *Original*, or custom) and the key, in semitones. The key can't change once the song starts.
 4. **Start.** The Stage tells REAPER to load the package and play.
 5. **During the song.** Lyrics follow REAPER's playback position, and stems can be toggled live.
-6. **End.** REAPER stops at the end of the project, and the screen returns to search.
+6. **End.** REAPER stops at the end of the project, and the screen goes to the results page, which leads to the next song in the playlist.
+
+The screens that carry this flow are in §5.7.
 
 ### 5.2 Song package
 
@@ -231,6 +234,48 @@ The folder is the library: one package per folder, named by its song id, as in �
 - **Leftovers:** a sync removes the partials of songs the Studio no longer lists and its own trash folders (`.<song_id>.<8 hex digits>.deleting`) that a removal could not finish. No other folder is touched.
 - **Output:** one line per song acted on (`added`, `updated`, `removed`, `busy` or `failed`, with the reason for the last two), then a line with the counts, the megabytes downloaded and the seconds taken.
 
+### 5.7 Web screens (beta target)
+
+The beta's screens, as the maintainer laid them out on 2026-11-14. They are not built yet. A7 and A8 use the same routes, data and session model, so the beta adds to the alpha screens instead of replacing them. A product version beyond the beta would be redesigned.
+
+Every screen shares one **playlist**: the songs lined up for the night, in order, the first one being the current song. An entry not yet in the Stage library shows its processing state (the Studio job of §5.3, then the Stage's download).
+
+| Route | Screen |
+|---|---|
+| `/karaoke` | Home: playlist, search and library. |
+| `/karaoke/stage` | Stage mode: the song's setup, then the song playing. |
+| `/karaoke/stage/results` | End of a performance. |
+
+**Home (`/karaoke`)**
+
+- With a playlist: the song playing, or the current one, with a prominent button to go to Stage mode. The upcoming songs sit in a side panel on the right, with reorder, remove and the processing state of each.
+- Search on YouTube: the user types a text and gets the first results, about 10. Each shows the full title, the thumbnail, a button to hear a random excerpt of the original recording (not processed) and a button to add it to the playlist.
+- Library: the songs already downloaded, with the same options as the search results.
+
+**Stage mode (`/karaoke/stage`), before the song starts**
+
+- A progress bar while the current song is not ready on the Stage yet.
+- The song's setup: music volume against mic volume, stems to mute (lead muted by default), key up or down, pitch correction on or off and its strength.
+- A prominent button to start the song.
+- The playlist in a bar at the bottom, with reorder, remove, the processing state of each and a skip to the next song.
+
+**Stage mode, while the song plays**
+
+- The lyrics in real time fill the main area, line by line as the song goes.
+- A bottom bar with pause, skip, and the music and voice volumes.
+
+**Results (`/karaoke/stage/results`)**
+
+- A report on the performance; what it shows is still to be defined (scoring is beta item 7).
+- A bottom bar with the next song in the playlist and two buttons: play it at once keeping the current song's settings, or go to the setup of Stage mode first.
+
+**What the screens need from the Stage**, beyond what the alpha has:
+
+- `Player` gains `pause` (REAPER action 1008) and track volume (`/_/SET/TRACK/{i}/VOL/{v}`, on the `Music` folder for the music and on the mic tracks for the voice). Neither is tried live yet. Skip is a stop the Stage asks for, so it is not an end of song (§5.4), followed by the next `load`.
+- Fetching one song on demand (a Studio job, then the download of that one package), next to the full mirror of `stage sync`.
+- Search results that carry the thumbnail and the `video_id` the job needs.
+- Still open (§9): how the app drives pitch correction, the preview of the original, thumbnails offline, which settings carry over to the next song, and where the playlist lives.
+
 ---
 
 ## 6. Execution plan
@@ -336,6 +381,8 @@ The goal is to remove the big risks before building the app. Each spike has a cr
 
 The alpha is a test run, not a finished event. The TV mirrors the Stage screen (over HDMI or screen casting) and is driven with the Stage's keyboard and mouse. The first night (A9) has no queue of participants: songs are picked at the Stage. Public access to the queue and the playlist comes after it, in A10.
 
+A7 and A8 already follow the beta screens (§5.7): the same routes, search results with the fields the beta shows, and a session built around a playlist. What they leave out waits for the beta: the preview, volumes, pause, pitch correction, reordering and the results report.
+
 | Milestone | Deliverable | Done when |
 |---|---|---|
 | A1 | Repository skeleton: uv workspace, Vite, and ruff, pytest and tsc in GitHub Actions. | CI is green on the first PR. |
@@ -344,8 +391,8 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 | A4 | Studio API (§5.3): FastAPI with jobs, library, files and deletion, started with `studio serve`. | The Stage creates a job and downloads the package over Tailscale. |
 | A5 | Stage library (§5.6): the folder of packages, with no SQLite (it comes with the play history), resumable downloads with hash checks, and `stage sync`, which mirrors the Studio library (adds, updates and removes), plus `stage list`. | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
 | A6 | REAPER bridge: session template (mic and stem tracks, no effects), Lua listener, the Python `Player` (load, play, stop, mute, transpose, position, end of song) and `stage play`. The pitch correction is no longer in the template: the effects chain guide comes from a guided test of pitch correction options. | A song plays from start to end driven only by the Stage. |
-| A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. | Same criterion as S4. |
-| A8 | TV UI: search or library → setup (stems + key) → playing with lyrics → end → back to search. | A first-time user picks a song and sings without help. |
+| A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. Up to about 10 results, each with what the §5.7 search list shows: full title, thumbnail, artist, album, duration and `video_id`. | Same criterion as S4. |
+| A8 | TV UI on the §5.7 routes, around a playlist: home (search or library, add to the playlist) → Stage mode setup (stems + key) → playing with lyrics → results (next song, or its setup). | A first-time user picks a song and sings without help. |
 | A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). The Studio API starts on its own with the Studio machine, with its permanent firewall rule. | A full karaoke test session at the venue. |
 | A10 | Public access on Vercel: participants reach the processing queue and the playlist from the internet. What runs on Vercel and how it reaches the Studio are open (§9); the separation itself cannot run there (it needs the GPU, its jobs take minutes, and `yt-dlp` needs deno). | A participant outside the venue's network adds a song and sees it in the playlist. |
 
@@ -382,6 +429,8 @@ The alpha is a test run, not a finished event. The TV mirrors the Stage screen (
 
 ### Phase 2: beta
 
+The beta's screens are in §5.7; the items below fill them in (pitch correction strength comes with item 3, the results report with item 7).
+
 Proposed order:
 
 1. **Two microphones:** each mic gets a role (lead or backing), and the role decides which original vocal stems are muted.
@@ -389,7 +438,7 @@ Proposed order:
    - Lyrics split into lead and backing, with WhisperX alignment.
    - Melody: pitch tracking on the lead stem gives the expected notes and the key per section. Backing gets the same only when it holds a single harmony line; several voices at once aren't reliable. The tracker is RMVPE, from S6.
 3. **Pitch correction guided by the song:** when it loads a song, the Lua listener writes a guide MIDI track with the expected notes and a key automation, both already transposed. Whether the pitch correction plugin uses them stays a choice made in REAPER. Target notes must allow singing an octave up or down.
-4. **Pre-performance:** before singing, the app plays a short excerpt with its lyrics on screen, so the singer can adjust stem volumes, the key and the lyrics offset. The offset is saved per song on the Stage.
+4. **Pre-performance,** on the setup of Stage mode (§5.7): before singing, the app plays a short excerpt with its lyrics on screen, so the singer can adjust stem volumes, the key and the lyrics offset. The offset is saved per song on the Stage.
 5. **Phone companion page** (local network, joined with a QR code): live lyrics and adding songs to the queue.
 6. **Recordings and portal:** the portal runs on Vercel (Next.js + Blob), with share links. Mics are recorded dry (before effects) for scoring, and with effects for sharing.
 7. **Post-song scoring:** pitch accuracy, timing and presence. Pitch accuracy compares the dry recording's pitch with the expected melody (transposed), ignoring octaves, with a tolerance of about 50 cents. It runs after the song, so nothing has to happen in real time. A live pitch display on the TV is out of scope for now: the app can't open the audio device, so it would have to run inside REAPER.
@@ -433,3 +482,8 @@ Proposed order:
 - [ ] Loudness target between songs (LUFS)
 - [ ] Hardware recommendations confirmed (from S1 and sound tests)
 - [ ] Public access (A10): what runs on Vercel, and how it reaches the Studio, which keeps the separation (GPU, jobs of minutes, `yt-dlp` with deno)
+- [ ] Pitch correction from the app (§5.7): the setup turns it on or off and sets its strength, while §3 leaves the effects chain to REAPER and the app never picks plugins. How the app finds the plugin and the parameter to drive.
+- [ ] Preview of the original (§5.7): where the audio comes from for a search result (a stream URL from `yt-dlp`, which needs deno on the Stage, or YouTube's own player), and how the browser's sound reaches the speakers while REAPER holds the interface through ASIO. A library song has no original file, only stems that add up to it.
+- [ ] Thumbnails offline (§5.7): the library screen needs them without internet, so they travel in the package (a manifest change) or get cached on the Stage.
+- [ ] Settings carried to the next song (§5.7, results): which of volumes, mutes, key and pitch correction carry over.
+- [ ] Where the playlist lives: in memory on the Stage or saved across restarts, and how A10's public access reaches it.

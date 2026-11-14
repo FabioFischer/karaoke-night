@@ -2,8 +2,9 @@
 
 Every route answers JSON under /api. A refusal carries a stable code for the
 screen to put into words and an English detail for the logs:
-{"error": code, "detail": text}. When a built web is given, every other path
-serves it, with index.html for the client routes such as /karaoke/stage.
+{"error": code, "detail": text}. When a built web is given, a GET of any
+path outside /api that no route matches serves it, with index.html for the
+client routes such as /karaoke/stage.
 """
 
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException
 
 from stage import library as lib
 from stage.lyrics import song_lyrics
@@ -24,7 +26,6 @@ from stage.session import Session, SessionError
 STATUS = {
     "unknown_entry": 404,
     "unknown_song": 404,
-    "not_found": 404,
     "no_song": 409,
     "not_ready": 409,
     "wrong_state": 409,
@@ -35,6 +36,8 @@ STATUS = {
     "listener_silent": 502,
     "reaper_failed": 502,
 }
+# The codes of the errors the routing itself answers.
+HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 
 class AddRequest(BaseModel):
@@ -90,6 +93,19 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     def invalid_request(request: Request, error: RequestValidationError) -> Response:
         return refusal("invalid_request", str(error.errors()))
+
+    @app.exception_handler(HTTPException)
+    def http_refused(request: Request, error: HTTPException) -> Response:
+        if error.status_code == 404 and web is not None and _wants_web(request):
+            return _web_file(web.resolve(), request.url.path.lstrip("/"))
+        return JSONResponse(
+            {
+                "error": HTTP_CODES.get(error.status_code, "http_error"),
+                "detail": f"{request.method} {request.url.path}: {error.detail}",
+            },
+            status_code=error.status_code,
+            headers=error.headers,
+        )
 
     @app.exception_handler(SessionError)
     def session_refused(request: Request, error: SessionError) -> Response:
@@ -156,8 +172,6 @@ def create_app(
     for name, action in actions.items():
         app.add_api_route(f"/api/session/{name}", _run(action, state), methods=["POST"])
 
-    if web is not None:
-        _serve_web(app, web.resolve())
     return app
 
 
@@ -169,13 +183,15 @@ def _run(action: Callable[[], None], state: Callable[[], dict]) -> Callable[[], 
     return run
 
 
-def _serve_web(app: FastAPI, root: Path) -> None:
-    @app.get("/{path:path}", include_in_schema=False)
-    def web_file(path: str) -> Response:
-        if path == "api" or path.startswith("api/"):
-            return refusal("not_found", f"no route /{path}")
-        target = (root / path).resolve()
-        if path and target.is_relative_to(root) and target.is_file():
-            return FileResponse(target)
-        # A client route: the web app reads the path itself.
-        return FileResponse(root / "index.html")
+def _wants_web(request: Request) -> bool:
+    path = request.url.path
+    api = path == "/api" or path.startswith("/api/")
+    return request.method in ("GET", "HEAD") and not api
+
+
+def _web_file(root: Path, path: str) -> Response:
+    target = (root / path).resolve()
+    if path and target.is_relative_to(root) and target.is_file():
+        return FileResponse(target)
+    # A client route: the web app reads the path itself.
+    return FileResponse(root / "index.html")

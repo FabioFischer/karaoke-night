@@ -313,3 +313,37 @@ def test_the_built_web_is_served_with_a_fallback_to_the_index(
 def test_without_a_built_web_only_the_api_is_served(stage) -> None:
     assert stage.client.get("/karaoke").status_code == 404
     assert stage.client.get("/api/state").status_code == 200
+
+
+@pytest.mark.parametrize("with_web", [False, True])
+def test_unknown_paths_and_wrong_methods_answer_the_error_shape(
+    packages, player, web, with_web
+) -> None:
+    client = Stage(packages, player, web=web if with_web else None).client
+
+    unknown = client.get("/api/unknown")
+    posted = client.post("/api/unknown")
+    wrong_method = client.get("/api/session/start")
+
+    assert (unknown.status_code, unknown.json()) == (
+        404,
+        {"error": "not_found", "detail": "GET /api/unknown: Not Found"},
+    )
+    assert (posted.status_code, posted.json()["error"]) == (404, "not_found")
+    assert (wrong_method.status_code, wrong_method.json()) == (
+        405,
+        {
+            "error": "method_not_allowed",
+            "detail": "GET /api/session/start: Method Not Allowed",
+        },
+    )
+    assert wrong_method.headers["allow"] == "POST"
+
+
+def test_a_path_outside_the_api_without_a_web_answers_the_error_shape(stage) -> None:
+    response = stage.client.get("/karaoke")
+
+    assert response.json() == {
+        "error": "not_found",
+        "detail": "GET /karaoke: Not Found",
+    }

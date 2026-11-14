@@ -9,16 +9,16 @@ import hashlib
 import logging
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
-from core.manifest import Manifest
+from core.manifest import Manifest, Stem
 from core.studio_api import SongSummary
 from pydantic import ValidationError
 
 from stage import library as lib
-from stage.client import StudioClient, StudioError
+from stage.client import StudioClient, StudioError, StudioUnreachable
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,27 @@ class Summary:
     unchanged: int = 0
     skipped: int = 0
     bytes_downloaded: int = 0
+
+
+@dataclass(frozen=True)
+class Progress:
+    """How far the download of one song got.
+
+    The manifest has no file sizes, so the whole is counted in files (the
+    stems and the lyrics); bytes_done counts the bytes received so far, not
+    the ones a partial folder already held.
+    """
+
+    files_done: int
+    files_total: int
+    bytes_done: int
+
+
+OnProgress = Callable[[Progress], None]
+
+
+def _ignore(progress: Progress) -> None:
+    pass
 
 
 def sync(
@@ -87,8 +108,36 @@ def sync(
         if current is not None and _same_version(current.manifest, song):
             summary.unchanged += 1
         else:
-            record(_install(library, studio, song, summary))
+            try:
+                outcome = _install(library, studio, song, summary)
+            except StudioUnreachable as error:
+                outcome = Outcome(song_id, "failed", str(error))
+            record(outcome)
     return summary
+
+
+def fetch(
+    library: Path,
+    studio: StudioClient,
+    song_id: str,
+    on_progress: OnProgress = _ignore,
+) -> Outcome | None:
+    """Download and install one song the Studio lists, as a sync installs it.
+
+    None when the library already holds the version the Studio lists. A
+    StudioError on the listing, and a StudioUnreachable while downloading,
+    propagate; so does an exception on_progress raises, which stops the
+    download there. The partial folder stays, and a later fetch or sync
+    resumes it.
+    """
+    song = next((song for song in studio.songs() if song.id == song_id), None)
+    if song is None or not lib.is_song_id(song_id):
+        return Outcome(song_id, "failed", "the Studio does not list the song")
+    library.mkdir(parents=True, exist_ok=True)
+    current = lib.scan(library).get(song_id)
+    if current is not None and _same_version(current.manifest, song):
+        return None
+    return _install(library, studio, song, Summary(), on_progress)
 
 
 def _same_version(manifest: Manifest, song: SongSummary) -> bool:
@@ -109,14 +158,21 @@ def _remove(song: lib.Song) -> Outcome:
 
 
 def _install(
-    library: Path, studio: StudioClient, song: SongSummary, summary: Summary
+    library: Path,
+    studio: StudioClient,
+    song: SongSummary,
+    summary: Summary,
+    on_progress: OnProgress = _ignore,
 ) -> Outcome:
     """Download the song into its partial folder, then move it into place.
 
-    The old version is replaced only once the new one is complete.
+    The old version is replaced only once the new one is complete. A
+    StudioUnreachable propagates, so a caller can try again later.
     """
     try:
-        errors = _download(library, studio, song, summary)
+        errors = _download(library, studio, song, summary, on_progress)
+    except StudioUnreachable:
+        raise
     except StudioError as error:
         return Outcome(song.id, "failed", str(error))
     except ValidationError as error:
@@ -171,9 +227,17 @@ def _put_back(trash: Path, target: Path, error: OSError) -> Outcome:
 
 
 def _download(
-    library: Path, studio: StudioClient, song: SongSummary, summary: Summary
+    library: Path,
+    studio: StudioClient,
+    song: SongSummary,
+    summary: Summary,
+    on_progress: OnProgress,
 ) -> list[str]:
-    """Fill the partial folder of song and return the reasons it is not complete."""
+    """Fill the partial folder of song and return the reasons it is not complete.
+
+    Every file is tried; when one failed for want of an answer, the reasons
+    are raised as StudioUnreachable instead.
+    """
     partial = lib.partial_folder(library, song.id)
     manifest = _kept_manifest(partial, song)
     if manifest is None:
@@ -185,31 +249,68 @@ def _download(
         # As downloaded: writing it through the model would drop fields it does not know.
         (partial / "manifest.json").write_bytes(raw)
 
+    progress = Progress(0, len(manifest.stems) + (manifest.lyrics is not None), 0)
+    on_progress(progress)
+
+    def received(size: int) -> None:
+        nonlocal progress
+        progress = replace(progress, bytes_done=progress.bytes_done + size)
+        on_progress(progress)
+
+    def file_done() -> None:
+        nonlocal progress
+        progress = replace(progress, files_done=progress.files_done + 1)
+        on_progress(progress)
+
     errors = []
+    unreachable = False
     for stem in manifest.stems.values():
-        target = partial / stem.file
-        if target.is_file() and _sha256(target) == stem.sha256:
-            continue
         try:
-            summary.bytes_downloaded += _fetch(studio, song.id, stem.file, target)
-        except StudioError as error:
-            errors.append(f"{stem.file}: {error}")
-            continue
-        if _sha256(target) != stem.sha256:
-            target.unlink()
-            errors.append(
-                f"{stem.file} does not match the sha256 of the manifest; "
-                "it is downloaded again on the next sync"
-            )
+            error = _download_stem(studio, song.id, partial, stem, summary, received)
+        except StudioError as failure:
+            error = f"{stem.file}: {failure}"
+            unreachable = unreachable or isinstance(failure, StudioUnreachable)
+        if error is not None:
+            errors.append(error)
+        file_done()
     if manifest.lyrics is not None:
         target = partial / manifest.lyrics.file
         try:
             summary.bytes_downloaded += _fetch(
-                studio, song.id, manifest.lyrics.file, target
+                studio, song.id, manifest.lyrics.file, target, received
             )
-        except StudioError as error:
-            errors.append(f"{manifest.lyrics.file}: {error}")
+        except StudioError as failure:
+            errors.append(f"{manifest.lyrics.file}: {failure}")
+            unreachable = unreachable or isinstance(failure, StudioUnreachable)
+        file_done()
+    if unreachable:
+        raise StudioUnreachable("; ".join(errors))
     return errors
+
+
+def _download_stem(
+    studio: StudioClient,
+    song_id: str,
+    partial: Path,
+    stem: Stem,
+    summary: Summary,
+    on_chunk: Callable[[int], None],
+) -> str | None:
+    """Download one stem unless the partial already holds it whole.
+
+    Returns None, or why the stem does not match; a StudioError propagates.
+    """
+    target = partial / stem.file
+    if target.is_file() and _sha256(target) == stem.sha256:
+        return None
+    summary.bytes_downloaded += _fetch(studio, song_id, stem.file, target, on_chunk)
+    if _sha256(target) != stem.sha256:
+        target.unlink()
+        return (
+            f"{stem.file} does not match the sha256 of the manifest; "
+            "it is downloaded again on the next sync"
+        )
+    return None
 
 
 def _kept_manifest(partial: Path, song: SongSummary) -> Manifest | None:
@@ -224,9 +325,15 @@ def _kept_manifest(partial: Path, song: SongSummary) -> Manifest | None:
     return manifest if _same_version(manifest, song) else None
 
 
-def _fetch(studio: StudioClient, song_id: str, path: str, target: Path) -> int:
+def _fetch(
+    studio: StudioClient,
+    song_id: str,
+    path: str,
+    target: Path,
+    on_chunk: Callable[[int], None],
+) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
-    return studio.download(song_id, path, target)
+    return studio.download(song_id, path, target, on_chunk)
 
 
 def _sha256(path: Path) -> str:

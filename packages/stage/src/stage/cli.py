@@ -1,4 +1,4 @@
-"""The `stage` command line: `stage sync`, `list`, `play` and `search`."""
+"""The `stage` command line: `stage sync`, `list`, `play`, `search` and `serve`."""
 
 import argparse
 import logging
@@ -8,14 +8,23 @@ import time
 from pathlib import Path
 
 import httpx2
+import uvicorn
 
 from stage import library as lib
 from stage import search
 from stage.client import StudioClient, StudioError
 from stage.player import Player, ReaperError, ReaperPlayer
+from stage.playlist import Playlist
+from stage.server import create_app
+from stage.session import Session
 from stage.sync import Outcome, sync
 
 DEFAULT_LIBRARY = Path("library")
+DEFAULT_WEB = Path("web") / "dist"
+# Loopback only: in the alpha the TV mirrors the Stage's own screen.
+HOST = "127.0.0.1"
+# REAPER's web interface is on 8080, the Studio API on 8790.
+DEFAULT_PORT = 8791
 TOKEN_VARIABLE = "STUDIO_TOKEN"
 POLL_INTERVAL_S = 0.25
 ACK_TIMEOUT_S = 5.0
@@ -86,7 +95,45 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     search_command.add_argument("text", help="words of the title or the artist")
-    for command in (sync_command, list_command, play_command, search_command):
+    serve_command = commands.add_parser(
+        "serve",
+        help="run the Stage API and the TV screens",
+        description=(
+            f"Serve the Stage API and the built web on http://{HOST}:<port>: the "
+            "playlist, the session that plays it in REAPER, search and lyrics. "
+            "New songs go to the Studio given by --studio, with the token from the "
+            f"{TOKEN_VARIABLE} environment variable; without them, only songs in "
+            "the library can be added. Never run it next to stage sync on the "
+            "same library."
+        ),
+    )
+    serve_command.add_argument(
+        "--studio",
+        metavar="URL",
+        help="the Studio API, for example http://studio:8790",
+    )
+    serve_command.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"the port to listen on (default: {DEFAULT_PORT})",
+    )
+    serve_command.add_argument(
+        "--web",
+        type=Path,
+        default=DEFAULT_WEB,
+        metavar="DIR",
+        help="the built web, from npm run build in web/ (default: web/dist, in "
+        "the current folder)",
+    )
+    commands_with_library = (
+        sync_command,
+        list_command,
+        play_command,
+        search_command,
+        serve_command,
+    )
+    for command in commands_with_library:
         command.add_argument(
             "--library",
             type=Path,
@@ -115,6 +162,8 @@ def main(argv: list[str] | None = None, http: httpx2.Client | None = None) -> in
             return play_song(args, http)
         if args.command == "search":
             return search_songs(args)
+        if args.command == "serve":
+            return serve(args, http)
         return list_library(args)
     finally:
         logger.removeHandler(handler)
@@ -257,3 +306,45 @@ def _follow(player: Player, duration_s: float) -> int:
             printed = int(position)
             print(f"{_duration(printed)} / {_duration(duration_s)}", flush=True)
         time.sleep(POLL_INTERVAL_S)
+
+
+def run_server(app, host: str, port: int) -> None:
+    uvicorn.run(app, host=host, port=port)
+
+
+def serve(args: argparse.Namespace, http: httpx2.Client | None) -> int:
+    token = os.environ.get(TOKEN_VARIABLE)
+    studio = StudioClient(args.studio, token) if args.studio and token else None
+    if studio is None:
+        print(
+            f"stage serve: no Studio (--studio and the {TOKEN_VARIABLE} environment "
+            "variable); only songs in the library can be added",
+            file=sys.stderr,
+        )
+    web = args.web if (args.web / "index.html").is_file() else None
+    if web is None:
+        print(
+            f"stage serve: no built web in {args.web} (npm run build in web/); "
+            "serving the API only",
+            file=sys.stderr,
+        )
+
+    def find(text: str) -> search.Found:
+        return search.find(
+            text, args.library, search.ytmusic_songs, search.ytdlp_videos
+        )
+
+    player = ReaperPlayer(http=http, ack_timeout_s=ACK_TIMEOUT_S)
+    playlist = Playlist(args.library, studio)
+    session = Session(playlist, args.library, player)
+    playlist.start()
+    try:
+        app = create_app(args.library, playlist, session, web=web, find=find)
+        run_server(app, HOST, args.port)
+    finally:
+        playlist.stop()
+        session.close()
+        player.close()
+        if studio is not None:
+            studio.close()
+    return 0

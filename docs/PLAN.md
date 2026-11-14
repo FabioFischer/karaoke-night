@@ -7,10 +7,10 @@
 *Last updated: 2026-11-14*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
 - **Next:**
   - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
-  - milestone A8 (TV UI on the §5.7 routes);
+  - milestone A8b (the TV screens on the §5.7 routes, over the §5.8 API);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -277,9 +277,41 @@ Every screen shares one **playlist**: the songs lined up for the night, in order
 **What the screens need from the Stage**, beyond what the alpha has:
 
 - `Player` gains `pause` (REAPER action 1008) and track volume (`/_/SET/TRACK/{i}/VOL/{v}`, on the `Music` folder for the music and on the mic tracks for the voice). Neither is tried live yet. Skip is a stop the Stage asks for, so it is not an end of song (§5.4), followed by the next `load`. `play()` goes to the start before it plays, so resuming after a pause must not call it: REAPER's pause action toggles, and A6 saw a second press resume playback.
-- Fetching one song on demand (a Studio job, then the download of that one package), next to the full mirror of `stage sync`.
+- Fetching one song on demand (a Studio job, then the download of that one package), next to the full mirror of `stage sync`. Built in A8a (§5.8).
 - Search results that carry the thumbnail and the `video_id` the job needs.
-- Still open (§9): the preview of the original, thumbnails offline, and which settings carry over to the next song.
+- Still open (§9): the preview of the original and thumbnails offline.
+
+### 5.8 Stage API
+
+FastAPI, started with `stage serve` (`--port` defaults to `8791`, `--library` as in the other `stage` commands, `--studio URL` with the token in the `STUDIO_TOKEN` environment variable, `--web DIR` defaulting to `web/dist` in the current folder). It listens on `127.0.0.1` only, since in the alpha the TV mirrors the Stage's own screen, and asks for no token. Without `--studio` or the token it still serves: songs of the library play, and a new song fails with `no_studio`. The routes live under `/api` and answer JSON; FastAPI's own docs are at `/api/docs`. A `GET` of any other path outside `/api` serves the built web: a file of it when one matches, else `index.html`, so a client route such as `/karaoke/stage` survives a reload. Without a built web (no `index.html` in `--web`) only the API is served.
+
+A refusal answers `{error, detail}`: `error` is a stable code the screens put into words (in Portuguese, A8b), `detail` an English line for the logs. Every error has that shape, the routing's own too: a body or query the routes cannot read is `invalid_request` (422), a path no route serves `not_found` (404), and a route asked with a method it does not take `method_not_allowed` (405).
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/state` | `{session, playlist}`, which the screens poll about every 250 ms. `session` is `{state, entry_id, muted, key, position_s, duration_s, error, detail}`: `entry_id` is the first entry in setup and the song played afterwards, `duration_s` that entry's duration (the manifest's once it plays), `position_s` null in setup. `playlist` holds the entries in order. |
+| `GET` | `/api/search?q=<text>` | `stage search` (§5.1): `{results, notice, detail}`, each result `{title, artist, origin, video_id, album, duration_s, thumbnail_url, song_id}`. `notice` is `offline` when the online search failed, with the English notice in `detail`. |
+| `GET` | `/api/library` | `{songs}`: every song of the library, as a search result. |
+| `GET` | `/api/library/{song_id}/lyrics` | `{status, lines}`, `status` being `synced`, `unsynced` or `none`, each line `{time_s, text}` (`time_s` null for unsynced lyrics). 404 `unknown_song`. |
+| `POST` | `/api/playlist` | Takes a search or library result and appends it: 201 with the entry. A result whose `song_id` is in the library is `ready` at once, with the fields of its manifest; any other one needs a `video_id` a Studio job accepts (§5.3), or gets 422 `not_addable`. |
+| `DELETE` | `/api/playlist/{entry_id}` | 204, 404 `unknown_entry`, or 409 `entry_playing` for the song playing. |
+| `PUT` | `/api/session/settings` | `{muted, key}`: the stems to mute and the key in semitones. Setup only. |
+| `POST` | `/api/session/start` | Plays the first entry with the settings. Setup only. |
+| `POST` | `/api/session/stop` | Stops the song playing and shows the results. |
+| `POST` | `/api/session/play_next` | From the results: removes the song played and plays the next one at once. |
+| `POST` | `/api/session/setup_next` | From the results: removes the song played and goes to the setup of the next one. |
+| `POST` | `/api/session/skip` | From the setup: removes the current song and sets up the next one. |
+
+The session routes answer the whole state, as `GET /api/state` does.
+
+- **Entries:** `{id, state, step, progress, error, detail, song}`, `song` being the result it was added from, with the `song_id` the Studio gives once the job exists. The states: `queued` (waiting for the Studio, also while a download retry waits, with its last error in `detail`), `starting` (the job is `queued` with `attempt` 1 or more and no `retry_at`, the Studio importing its models, A4), `downloading`, `separating` (with `step`), `lyrics`, `packaging`, `fetching` (the download to the Stage, with `progress` `{files_done, files_total, bytes_done}`; the manifest has no file sizes, so the whole is counted in files, the stems and the lyrics), `ready`, and `failed` with `error` `no_studio`, `studio_error`, `job_failed`, `fetch_failed` or `internal_error` and the reason in `detail`. An entry that is not `failed` may carry the warning `error` `studio_unreachable`, with the reason in `detail`, while the worker waits to try again (below); the next step that works clears it.
+- **Worker:** one thread polls the job of each entry every 2 s (at once after an add) and fetches the package of a `done` job: the download and install of one song from `stage sync` (§5.6: partial folder, resume, hash checks, the old version replaced only by a complete one). The other entries wait while it fetches. A song the library holds already in the listed version is ready without a download, and an update a loaded song blocks (busy) leaves the old version, which plays. A 404 on `GET /jobs/{id}`, what the Studio answers for a job it lost in a restart (§5.3), submits the job again: the Studio answers with a done job when the package exists, or starts it over. A Studio that does not answer (network down, Studio stopped, a timeout), while the worker submits, follows or fetches, keeps the entry in its state with the warning `studio_unreachable`, and the worker tries again on its next cycle; a fetch cut that way resumes from its partial folder. The entry fails only on an answer: the job `failed` (`job_failed`), an error answer such as 401 or 500 or an answer the Stage cannot read (`studio_error`), or a package that does not install, such as a stem that does not match its hash or an invalid manifest (`fetch_failed`). Adding a failed song again picks up the job the Studio may still be running, since it returns the active job of a video (§5.3). The worker checks an entry is still in the playlist before each step: a removed or skipped entry gets no job, and its download stops at the next chunk, leaving the partial folder for a later fetch or `stage sync`.
+- **Session:** `setup → playing → results`. A setup starts with the lead muted and the key at 0. `start` loads the song, sets every stem of the manifest (muted or not, so the previous song's mutes do not stay), sends the key and plays; it is refused with `no_song` (empty playlist), `not_ready` (the entry is not ready, or its package left the library) or `wrong_state`. While the song plays, a thread reads the position about every 250 ms, and the song ends by the §5.4 rule (REAPER stopped without the Stage asking). `stop` is a stop the Stage asks for, so it is not an end by that rule: the session itself moves to the results. From the results, `play_next` keeps the muted stems and puts the key back at 0; it is refused with `no_song` or `not_ready`, changing nothing, when the next entry is missing or not ready. `setup_next` and `skip` go back to the defaults.
+- **REAPER errors** answer 502: `reaper_unreachable` (its web interface does not answer), `listener_silent` (no ack within 5 s; restart the listener, §5.4) or `reaper_failed` (anything else, such as a missing stem track). A failed `start` stays in setup; a failed `stop` still moves to the results; a failed position read keeps playing. The error also stays in `session.error` and `session.detail` until the next action or position read that works.
+- **One REAPER command at a time:** the listener's `cmd` and `ack` are single slots (§5.4), so every `Player` call, from an action or from the position thread, goes through one lock.
+- **Lyrics:** LRC lines `[mm:ss.xx] text` with 0 to 3 digits of fraction, in time order; a line with several stamps comes once per stamp, CRLF and a byte order mark are accepted, and tags such as `[ar:...]` are skipped. The manifest's `lyrics.offset_ms` is added to every time, so a positive offset shows the lines later. Unsynced lyrics come one line per line of text.
+- **One library, one writer:** the worker writes into the library as `stage sync` does, so `stage serve` and `stage sync` must not run on the same library at once. Nothing enforces it.
+- **Not in A8a** (beta, §5.7): the preview of the original, volumes, pause, reordering, the results report and stems toggled while the song plays.
 
 ---
 
@@ -397,7 +429,7 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 | A5 | Stage library (§5.6): the folder of packages, with no SQLite (it comes with the play history), resumable downloads with hash checks, and `stage sync`, which mirrors the Studio library (adds, updates and removes), plus `stage list`. | With no internet, the Stage lists and plays synced songs. A song deleted on the Studio disappears from the Stage after the next sync. |
 | A6 | REAPER bridge: session template (mic and stem tracks, no effects), Lua listener, the Python `Player` (load, play, stop, mute, transpose, position, end of song) and `stage play`. The pitch correction is no longer in the template: the effects chain guide comes from a guided test of pitch correction options. | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. Up to about 10 results, each with what the §5.7 search list shows: full title, thumbnail, artist, album, duration and `video_id`. | Same criterion as S4. |
-| A8 | TV UI on the §5.7 routes, around a playlist: home (search or library, add to the playlist) → Stage mode setup (stems + key) → playing with lyrics → results (next song, or its setup). | A first-time user picks a song and sings without help. |
+| A8 | TV UI on the §5.7 routes, around a playlist: home (search or library, add to the playlist) → Stage mode setup (stems + key) → playing with lyrics → results (next song, or its setup). Two PRs: A8a, the Stage API (§5.8) and `stage serve`; A8b, the screens. | A first-time user picks a song and sings without help. |
 | A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). The Studio API starts on its own with the Studio machine, with its permanent firewall rule. | A full karaoke test session at the venue. |
 | A10 | Public access on Vercel: participants reach the processing queue and the playlist from the internet. What runs on Vercel and how it reaches the Studio are open (§9); the separation itself cannot run there (it needs the GPU, its jobs take minutes, and `yt-dlp` needs deno). | A participant outside the venue's network adds a song and sees it in the playlist. |
 
@@ -439,6 +471,12 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 - **Without internet** (simulated with a dead proxy): the library matches and the notice, exit 0. It took 19.3 s, 16.5 s of it yt-dlp retrying on its own; with `extractor_retries` at 1 it takes 11.2 s (about 2 s ytmusicapi, 8 s yt-dlp). A network that hangs instead of refusing was not measured.
 - **Blank text** (empty or only spaces) searches nothing: before the fix it called both sources, which failed on it and printed the offline notice with internet up, and yt-dlp returned unrelated videos for spaces.
 - **Fields:** ytmusicapi returned 20 to 29 songs per query whatever its limit says, with thumbnails of 60 and 120 px only, and some songs without an album; yt-dlp entries have no album and the channel stands in for the artist, with thumbnails up to 720 px.
+
+**A8a (2026-11-14): pass.** `stage serve` on the Stage, against the Studio over Tailscale and REAPER 7.85 with the session template.
+
+- **Studio:** adding a song the Studio already held went `queued` → `fetching` (0 to 8 files) → `ready` in 11.7 s, into an empty library. Removed after 2 of its stems, the entry left the playlist and its download stopped, the partial folder kept. With the Studio unreachable, an added song stayed `queued` with the `studio_unreachable` warning instead of failing.
+- **REAPER, driven only through the API:** a 2:19 song with the lead muted and the key at +2 started in 0.95 s and played to its end; the session moved to `results` on its own when REAPER stopped. "Next now" played the next song with the lead still muted and the key back to 0; a stop through the API about 20 s in moved the session to `results` and left REAPER stopped; "setup next" with an empty playlist went back to `setup`. By ear: lead silent in both, the first song higher, the second in its original key, no crackle or dropout on the mic.
+- **Routes:** a reload of `/karaoke/stage/results` served the web, an unknown `/api` path answered 404 and a GET on a POST route 405, both as `{error, detail}`.
 
 ### Phase 2: beta
 
@@ -497,5 +535,5 @@ Proposed order:
 - [ ] Public access (A10): what runs on Vercel, and how it reaches the Studio, which keeps the separation (GPU, jobs of minutes, `yt-dlp` with deno)
 - [ ] Preview of the original (§5.7): where the audio comes from for a search result (a stream URL from `yt-dlp`, which needs deno on the Stage, or YouTube's own player), and how the browser's sound reaches the speakers while REAPER holds the interface through ASIO. A library song has no original file, only stems that add up to it.
 - [ ] Thumbnails offline (§5.7): the library screen needs them without internet, so they travel in the package (a manifest change) or get cached on the Stage.
-- [ ] Settings carried to the next song (§5.7, results): which of volumes, mutes and key carry over.
+- [x] Settings carried to the next song (§5.7, results): playing the next one at once keeps the muted stems and puts the key back at 0 (§5.8). Volumes come with the beta.
 - [x] Where the playlist lives: in the Stage's memory while the service runs (§5.7). How A10's public access reaches it belongs to the A10 decision above.

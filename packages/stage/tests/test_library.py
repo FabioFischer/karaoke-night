@@ -113,6 +113,25 @@ def test_a_package_with_an_invalid_manifest_is_skipped_with_a_warning(
     ]
 
 
+def test_a_package_moved_away_while_scanned_is_skipped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The worker swaps a package while a request scans the library."""
+    write_song(tmp_path, SONG)
+    moving = "moving-song--artist-name--d4e5f6"
+    write_song(tmp_path, moving)
+    read_bytes = Path.read_bytes
+
+    def moved_first(self: Path) -> bytes:
+        if self.parent.name == moving:
+            lib.move_to_trash(self.parent)
+        return read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", moved_first)
+
+    assert list(lib.scan(tmp_path)) == [SONG]
+
+
 def test_delete_renames_then_removes(tmp_path: Path) -> None:
     write_song(tmp_path, SONG)
 

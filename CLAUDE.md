@@ -84,4 +84,15 @@ uv run stage play <song_id> [--library DIR] [--mute STEM ...] [--transpose N]
 
 `stage play` loads the song in REAPER, mutes the stems given and unmutes the others, shifts every stem except drums by `--transpose` semitones (0 by default), plays from the start and prints the position once per second until the song ends (exit 0). Ctrl+C stops playback and exits 130. It exits with 1 when the song is not in the library, REAPER cannot be reached or the listener does not answer (restart it then, as the error says). There is no Lua interpreter in CI: the listener and the template are proven only in a live REAPER.
 
+### Stage server
+
+`stage serve` runs the Stage API behind the TV screens (`docs/PLAN.md` §5.8) and, once `web/` is built (`npm run build`), the screens themselves. Run it from the repository root, with REAPER set up as above:
+
+```powershell
+$env:STUDIO_TOKEN = "<the token studio serve was started with>"
+uv run stage serve --studio http://<studio address>:8790 [--library DIR] [--port 8791] [--web DIR]
+```
+
+It listens on `127.0.0.1` only, port 8791 by default, and serves the built web from `--web` (default `web/dist` in the current folder), or only the API when that folder holds no `index.html`, which it says on stderr. Without `--studio` or `STUDIO_TOKEN` it still serves and says so: songs of the library play, and a new song added to the playlist fails with the reason. The playlist lives in memory and is lost when the server stops. The playlist worker downloads new songs into the library, so never run `stage serve` and `stage sync` on the same library at once (nothing enforces it). `uv run stage serve --help` lists the options.
+
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

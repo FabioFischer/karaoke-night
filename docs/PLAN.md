@@ -7,10 +7,10 @@
 *Last updated: 2026-11-14*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b built: the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, not tried live yet. The beta's web screens (§5.7), the target A7 and A8 build toward.
 - **Next:**
   - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
-  - milestone A8b (the TV screens on the §5.7 routes, over the §5.8 API);
+  - try the A8b screens live on the Stage, in a browser against `stage serve` and REAPER, and record the results in §6 Phase 1;
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -241,7 +241,7 @@ The folder is the library: one package per folder, named by its song id, as in �
 
 ### 5.7 Web screens (beta target)
 
-The beta's screens, as the maintainer laid them out on 2026-11-14. They are not built yet. A7 and A8 use the same routes, data and session model, so the beta adds to the alpha screens instead of replacing them. A product version beyond the beta would be redesigned.
+The beta's screens, as the maintainer laid them out on 2026-11-14. A8b built them in their alpha subset: no preview of the original, no volumes, no pause, no reordering, no results report, and no stems toggled while the song plays; the key is limited to -6 to +6 semitones by the screen, not the API, and the screens speak Brazilian Portuguese. A7 and A8 use the same routes, data and session model, so the beta adds to the alpha screens instead of replacing them. A product version beyond the beta would be redesigned.
 
 Every screen shares one **playlist**: the songs lined up for the night, in order, the first one being the current song. It lives in the Stage's memory while the service runs; a restart starts with an empty playlist. An entry not yet in the Stage library shows its processing state (the Studio job of §5.3, then the Stage's download).
 

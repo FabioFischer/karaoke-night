@@ -6,7 +6,7 @@ REAPER is the player on the Stage (`docs/PLAN.md` §3 and §5.4). The Stage driv
 |---|---|
 | `scripts/karaoke_listener.lua` | The listener. It runs `load`, `transpose`, `ping` and `quit`, sent by the Stage through ExtState. |
 | `scripts/lib/json.lua` | [rxi/json.lua](https://github.com/rxi/json.lua) v0.1.2 (MIT, notice in the file header), vendored unmodified. |
-| `template/karaoke.RPP` | The session: 44.1 kHz, the tracks `Mic 1` and `Mic 2` (mono inputs 1 and 2, armed, input monitoring on), then `Lead`, `Backing`, `Drums`, `Bass`, `Guitar`, `Piano` and `Other` (not armed, input monitoring off). No effects. |
+| `template/karaoke.RPP` | The session: 44.1 kHz, the tracks `Mic 1` and `Mic 2` (mono inputs 1 and 2, armed, input monitoring on), then the folder track `Music` at -8 dB holding `Lead`, `Backing`, `Drums`, `Bass`, `Guitar`, `Piano` and `Other` (not armed, input monitoring off). No effects. |
 
 ## Setup checklist
 

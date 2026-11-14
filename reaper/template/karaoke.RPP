@@ -9,6 +9,12 @@
     REC 1 1 1 0 0 0 0
   >
   <TRACK
+    NAME Music
+    VOLPAN 0.398107 0 -1 -1 1
+    ISBUS 1 1
+    REC 0 0 0 0 0 0 0
+  >
+  <TRACK
     NAME Lead
     REC 0 0 0 0 0 0 0
   >
@@ -35,5 +41,6 @@
   <TRACK
     NAME Other
     REC 0 0 0 0 0 0 0
+    ISBUS 2 -1
   >
 >

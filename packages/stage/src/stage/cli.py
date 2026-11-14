@@ -1,4 +1,4 @@
-"""The `stage` command line: `stage sync`, `stage list` and `stage play`."""
+"""The `stage` command line: `stage sync`, `list`, `play` and `search`."""
 
 import argparse
 import logging
@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx2
 
 from stage import library as lib
+from stage import search
 from stage.client import StudioClient, StudioError
 from stage.player import Player, ReaperError, ReaperPlayer
 from stage.sync import Outcome, sync
@@ -75,7 +76,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="semitones to shift every stem except drums (default: 0)",
     )
     play_command.set_defaults(usage_error=play_command.error)
-    for command in (sync_command, list_command, play_command):
+    search_command = commands.add_parser(
+        "search",
+        help="search the library and YouTube Music",
+        description=(
+            "Search the library, then YouTube Music (or YouTube through yt-dlp "
+            "when YouTube Music fails). The songs already in the library come "
+            "first. Without internet, only the library is searched."
+        ),
+    )
+    search_command.add_argument("text", help="words of the title or the artist")
+    for command in (sync_command, list_command, play_command, search_command):
         command.add_argument(
             "--library",
             type=Path,
@@ -102,6 +113,8 @@ def main(argv: list[str] | None = None, http: httpx2.Client | None = None) -> in
             return sync_library(args, http)
         if args.command == "play":
             return play_song(args, http)
+        if args.command == "search":
+            return search_songs(args)
         return list_library(args)
     finally:
         logger.removeHandler(handler)
@@ -164,6 +177,27 @@ def list_library(args: argparse.Namespace) -> int:
             f"{_duration(manifest.duration_s)}"
         )
     return 0
+
+
+def search_songs(args: argparse.Namespace) -> int:
+    found = search.find(
+        args.text, args.library, search.ytmusic_songs, search.ytdlp_videos
+    )
+    if not found.results:
+        print(f"no results for {args.text!r}")
+    for result in found.results:
+        print(_search_line(result))
+    if found.notice is not None:
+        print(found.notice)
+    return 0
+
+
+def _search_line(result: search.Result) -> str:
+    state = "new" if result.song_id is None else "ready"
+    duration = None if result.duration_s is None else _duration(result.duration_s)
+    columns = [result.title, result.artist, result.album, duration, result.video_id]
+    line = f"{state:<5}  " + "  ".join(value or "-" for value in columns)
+    return line if result.song_id is None else f"{line}  {result.song_id}"
 
 
 def play_song(args: argparse.Namespace, http: httpx2.Client | None) -> int:

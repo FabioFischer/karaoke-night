@@ -7,10 +7,10 @@
 *Last updated: 2026-11-14*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward.
 - **Next:**
   - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
-  - milestone A7 (search), with results shaped for the §5.7 search list;
+  - milestone A8 (TV UI on the §5.7 routes);
   - measure a package download on the venue's own network during the first night (A9);
   - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
 
@@ -96,6 +96,11 @@ STAGE · Windows machine at the venue
 ### 5.1 Song flow
 
 1. **Search on the TV.** The Stage lists what's already in the library first (marked "ready"), then YouTube Music results (marked "process, ~2 min"). A library screen also lists every ready song.
+   - **Library matches** need no network: a song matches when every word of the query appears in its title or artist, even as part of a longer word, with case and accents ignored (Unicode NFKD without combining marks, then casefold).
+   - **Online results:** up to 10 from `ytmusicapi` (`filter="songs"`, which returns about 20 whatever its limit says, so the Stage keeps the first 10). If it fails or finds nothing, a flat `yt-dlp` search (`ytsearch10:`) takes its place: it lists hits without resolving each video, so it needs no JS runtime, and it has no album and no separate artist, so the channel stands in for the artist.
+   - **No duplicates:** an online result whose `video_id` is already in the library (manifest `source.video_id`) shows once, as the library song, after the songs the words matched, so a typo that misses the library still finds it.
+   - **Without internet** the library matches come back with a notice that the online search failed, never an error.
+   - **Each result** carries the full title, the artist (all of them, joined with ", "), the album, the duration, the largest thumbnail the source gave, the `video_id` (what `POST /jobs` needs, §5.3) and, for a library song, its `song_id`. Missing values stay empty. Library songs have no thumbnail yet (§9, thumbnails offline). `stage search "<text>"` prints them, one line each.
 2. **New song.** The Stage creates a job on the Studio, tracks its progress and downloads the package, with resume and hash checks.
 3. **Setup.** The singer picks the active stems (presets *Karaoke*, *Backing only*, *Original*, or custom) and the key, in semitones. The key can't change once the song starts.
 4. **Start.** The Stage tells REAPER to load the package and play.
@@ -426,6 +431,14 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 - **Headroom:** the stems come close to full scale, so the voice on top was quiet, and clipped once raised. The template now holds the stems in a `Music` folder track at -8 dB, which left room for the voice and gives the music one fader.
 - **Input monitoring crackled** on battery until the buffer went up to 512 samples (S1 ran clean at 128 plugged in); repeating it plugged in is pending.
 - **Pitch correction,** the guided test for the effects chain guide (`reaper/README.md`): Graillon 3 Free corrected well but added about 26 ms (from about 30 to about 56 ms round trip at 512 samples), uncomfortable at that buffer; ReaTune added about 7000 samples and is not usable live.
+
+**A7 (2026-11-14): pass.** `stage search` on the Stage, ytmusicapi 1.12.3 and yt-dlp 2026.10.26, over the 21 test songs typed as in S4, checked by a script against the video ids the S4 verdicts chose (the ones A3 processed).
+
+- **Search:** run once with an empty library, the chosen version was in the online top 3 for 20 of 21 songs, first for all 20; a second run after the fix round found 21 of 21. The miss was YouTube Music itself: seven calls of the same query returned the chosen video id at #2 in some and left it out of the top 4 in others, with an upload of the same title and length always first. Each search took 1.1 to 1.6 s.
+- **Library first:** with the 21 package library, the local song came first, marked ready, for 21 of 21.
+- **Without internet** (simulated with a dead proxy): the library matches and the notice, exit 0. It took 19.3 s, 16.5 s of it yt-dlp retrying on its own; with `extractor_retries` at 1 it takes 11.2 s (about 2 s ytmusicapi, 8 s yt-dlp). A network that hangs instead of refusing was not measured.
+- **Blank text** (empty or only spaces) searches nothing: before the fix it called both sources, which failed on it and printed the offline notice with internet up, and yt-dlp returned unrelated videos for spaces.
+- **Fields:** ytmusicapi returned 20 to 29 songs per query whatever its limit says, with thumbnails of 60 and 120 px only, and some songs without an album; yt-dlp entries have no album and the channel stands in for the artist, with thumbnails up to 720 px.
 
 ### Phase 2: beta
 

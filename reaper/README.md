@@ -56,4 +56,4 @@ Measured in the guided test (A6, 2026-11-13), on the Stage with an entry-level i
 
 - **Dry must be 0 in Graillon.** Dry is the input delayed to line up with the corrected voice; left up, the uncorrected voice sounds under the corrected one.
 - **The `I2` engine** of Graillon is very heavy on the CPU (its guide calls it "very slow mode"): not for live use. Graillon's full edition adds tuning per key, pitch tracking modulation and a doubler; its guide mentions no lower latency.
-- **Still to test:** Graillon at a 128 sample buffer with the machine plugged in. In S1 the same plugin at 128 samples felt comfortable. A native ASIO interface lowers the round trip of the interface, not the plugin's own latency.
+- **Still to test, after the interface upgrade:** Graillon at a 128 sample buffer with the machine plugged in. In S1 the same plugin at 128 samples felt comfortable. The test waits for the new interface, together with S1 round 2, since the latency and the buffer may change with it. A native ASIO interface lowers the round trip of the interface, not the plugin's own latency.

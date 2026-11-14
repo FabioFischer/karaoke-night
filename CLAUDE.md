@@ -98,4 +98,20 @@ It listens on `127.0.0.1` only, port 8791 by default, and serves the built web f
 
 The screens are `/karaoke` (home), `/karaoke/stage` (setup, then the song playing) and `/karaoke/stage/results`; `/` goes to `/karaoke`. To work on them, run `stage serve` on its default port and `npm run dev` in `web/`: the Vite dev server sends `/api` to `http://127.0.0.1:8791`. There is no front end test runner: the logic lives in the Stage API and its tests, and the screens are proven by `npm run build` and in a browser.
 
+### Night scripts
+
+`scripts/` holds the PowerShell scripts of a night (Windows PowerShell 5.1); `docs/NIGHT.md` is the runbook that uses them. Each runs as `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\<name>.ps1 ...`, finds the clone from its own location, and runs the clone's `.venv\Scripts\stage.exe` or `studio.exe` directly, not `uv run`. A token file holds the Studio token; the scripts never print it or put it on a command line.
+
+```powershell
+scripts\stage-night.ps1 -Project <session.RPP> [-Studio URL] [-TokenFile FILE] [-Library DIR] [-Port 8791] [-ReaperPath EXE] [-EdgePath EXE]
+scripts\studio-start.ps1 -TokenFile FILE [-Library DIR] [-ModelDir DIR] [-Port 8790] [-LogFile FILE]
+scripts\studio-stop.ps1
+```
+
+- `stage-night.ps1`, the target of the Stage's desktop shortcut: opens REAPER with the session unless a REAPER is already running (two would mean two listeners), starts `stage serve` in its own console window (closing it stops the server), waits up to 30 s for `/api/state`, then opens Edge in full screen at `/karaoke` as an app window, with its own profile under `%LOCALAPPDATA%\karaoke-night\edge`. The library defaults to `library` in the clone. On a failure it prints the reason and waits for Enter, so the shortcut's window does not close with it.
+- `studio-start.ps1`, on the Studio in an administrator PowerShell or over SSH: does nothing when a `studio serve` of this clone already runs (a second one would remove the first one's builds in flight, see Studio API above). Otherwise it creates the firewall rule `karaoke-studio` when missing (inbound TCP on `-Port`, interface `Tailscale`, remote `100.64.0.0/10`) and starts `studio serve` detached with `Win32_Process.Create`, so it survives the end of an SSH session, its output appended to `-LogFile` (default `studio-serve.log` in the clone, which git ignores). `--library` and `--model-dir` go to `studio serve` only when given, so its defaults apply relative to the clone.
+- `studio-stop.ps1`: stops every process whose command line holds this clone's `.venv\Scripts\studio.exe` and `serve` (the wrapper, `studio.exe` and its Python processes), then removes the rule. It prints what it stopped, and nothing when nothing runs.
+
+None of them has a test harness: they are proven by parsing and in a live run.
+
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

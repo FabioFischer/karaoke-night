@@ -8,13 +8,12 @@
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
 - **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only during an event, and the public page lives on Vercel, fed by a snapshot the Stage publishes.
+- **In progress:** milestone A9 (first night): the night scripts (`scripts/`) and the runbook (`docs/NIGHT.md`), then the full test session at the venue.
 - **Next:**
-  - repeat the pitch correction test plugged in, at a 128 sample buffer (A6 results), and finish the effects chain guide in `reaper/README.md`;
   - the A8 criterion with someone who has never used the app, at the first night (A9);
-  - milestone A9 (first night);
+  - measure a package download on the venue's own network during the first night (A9, `docs/NIGHT.md`);
   - milestone A10 (public access, §5.9);
-  - measure a package download on the venue's own network during the first night (A9);
-  - S1 round 2 after an interface upgrade, which the beta's second mic needs anyway.
+  - after an interface upgrade, which the beta's second mic needs anyway: S1 round 2, and the pitch correction test plugged in at a 128 sample buffer (A6 results), which finishes the effects chain guide in `reaper/README.md`. The test waits for the new interface because the latency and the buffer may change with it.
 
 ## 1. Goal
 
@@ -219,7 +218,8 @@ karaoke-night/
 ├─ LICENSE
 ├─ CLAUDE.md                    # guidance for AI coding agents
 ├─ docs/
-│  └─ PLAN.md                   # this file
+│  ├─ PLAN.md                   # this file
+│  └─ NIGHT.md                  # runbook of a karaoke night
 ├─ pyproject.toml               # uv workspace
 ├─ packages/
 │  ├─ core/                     # shared models (manifest, contracts), lightweight
@@ -230,6 +230,7 @@ karaoke-night/
 │  ├─ README.md                 # setup checklist, effects chain guide
 │  ├─ scripts/                  # karaoke_listener.lua, lib/json.lua
 │  └─ template/                 # base session (karaoke.RPP)
+├─ scripts/                     # night scripts (PowerShell): stage-night, studio-start, studio-stop
 └─ .github/workflows/ci.yml     # ruff + pytest + tsc
 ```
 
@@ -337,7 +338,8 @@ During an event, the public reaches the karaoke through a link to `/karaoke` on 
 - **Polling and cost:** phones poll the snapshot every 2 s, and the function's answer is cached at Vercel's edge for 1 s (`s-maxage=1`), so the store sees about one read per second per region however many phones there are. Estimate for a 3 hour event with 20 phones, not measured: about 30,000 store commands (Upstash's free tier allows 500,000 a month), about 11,000 function runs and about 108,000 edge requests (third party sources give Vercel Hobby 1,000,000 of each a month; to be confirmed on Vercel's pricing page). The edge requests grow with the phones and the poll rate, so they are the number to watch.
 - **Latency of a request:** an add or a remove shows in the playlist 2 to 3 s after it is sent (the request read within about a second, a snapshot published, a phone poll). A public search takes the Stage's search time (1.1 to 1.6 s in A7) plus that round trip, about 3 s in all.
 - **When the Stage is off or offline:** the page shows the last snapshot with a notice that the karaoke is offline, from the time the snapshot carries. The Stage's own screens and playback never depend on the internet (§4, principle 1).
-- **Open for A10:** what happens to requests left in the store while the Stage was off, how the public screen follows the §5.7 home, and the layout of the Vercel project.
+- **Requests left in the store** while the Stage was off are discarded when `stage serve` starts.
+- **Open for A10:** how the public screen follows the §5.7 home, and the layout of the Vercel project.
 
 ---
 
@@ -456,7 +458,7 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 | A6 | REAPER bridge: session template (mic and stem tracks, no effects), Lua listener, the Python `Player` (load, play, stop, mute, transpose, position, end of song) and `stage play`. The pitch correction is no longer in the template: the effects chain guide comes from a guided test of pitch correction options. | A song plays from start to end driven only by the Stage. |
 | A7 | Search: `ytmusicapi` with a `yt-dlp` fallback, showing library matches first. Up to about 10 results, each with what the §5.7 search list shows: full title, thumbnail, artist, album, duration and `video_id`. | Same criterion as S4. |
 | A8 | TV UI on the §5.7 routes, around a playlist: home (search or library, add to the playlist) → Stage mode setup (stems + key) → playing with lyrics → results (next song, or its setup). Two PRs: A8a, the Stage API (§5.8) and `stage serve`; A8b, the screens. | A first-time user picks a song and sings without help. |
-| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser, plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). One command, run by hand or over SSH, starts the Studio API for the event with its firewall rule, and another stops it and removes the rule (§3, Studio availability). | A full karaoke test session at the venue. |
+| A9 | First night: one shortcut opens REAPER, the Stage and the full-screen browser (`scripts/stage-night.ps1`), plus a setup checklist (interface plugged straight into the machine, Windows sample rate matching REAPER's, a single monitoring path). One command, run by hand or over SSH, starts the Studio API for the event with its firewall rule (`scripts/studio-start.ps1`), and another stops it and removes the rule (`scripts/studio-stop.ps1`, §3, Studio availability). The runbook is `docs/NIGHT.md`. | A full karaoke test session at the venue. |
 | A10 | Public access (§5.9): the Stage publishes a snapshot to a store on Vercel and applies the requests left there; a public `/karaoke` on Vercel shows the playlist, searches, adds and removes songs, and follows the lyrics. The separation stays on the Studio (it needs the GPU, its jobs take minutes, and `yt-dlp` needs deno). | A participant on a phone, outside the venue's network, adds a song, sees it in the playlist and follows its lyrics. |
 
 **A3 (2026-11-12): pass.** All 21 test songs processed on the Studio with `studio process`, from their YouTube Music video ids. Every package loads with the §5.2 model, all 147 stem hashes match, every stem is 44.1 kHz stereo 16-bit, and every song has synced LRCLIB lyrics. The stems add up to the mix on every song: the largest sample error was between -76.6 and -80.8 dBFS (3.0 to 4.9 steps of 16 bits) and the residual RMS between -89.5 and -93.0 dBFS. The timed runs took 96 to 259 s per song, download included, and the library came to 2.1 GB.
@@ -569,3 +571,4 @@ Proposed order:
 - [ ] Thumbnails offline (§5.7): the library screen needs them without internet, so they travel in the package (a manifest change) or get cached on the Stage.
 - [x] Settings carried to the next song (§5.7, results): playing the next one at once keeps the muted stems and puts the key back at 0 (§5.8). Volumes come with the beta.
 - [x] Where the playlist lives: in the Stage's memory while the service runs (§5.7). How A10's public access reaches it belongs to the A10 decision above.
+- [ ] A health check that confirms the Studio, the Stage and the public page are all up (idea, not scheduled).

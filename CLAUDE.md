@@ -9,6 +9,7 @@ Read [docs/PLAN.md](docs/PLAN.md) first. It holds the decisions, architecture, c
 ## Rules
 
 - **English only.** Everything committed is in English: code, comments, docs, commit messages and PR descriptions.
+- **One exception: the screens speak Brazilian Portuguese,** since the singers read it. Every string the web shows lives in `web/src/text.ts`, and nowhere else; the web's code and comments stay in English.
 - **No personal information.** Never commit anything about the maintainer's own hardware, people, venues or song preferences. Describe requirements generically, and use placeholder song data in examples and tests.
 - **Personal data stays local.** Personal data that work needs, such as the test song list, lives in gitignored `*.local.*` files (for example `songs.local.txt` at the repository root).
 - **No audio or model weights.** Never commit source audio, stems, recordings or model weights.
@@ -94,5 +95,7 @@ uv run stage serve --studio http://<studio address>:8790 [--library DIR] [--port
 ```
 
 It listens on `127.0.0.1` only, port 8791 by default, and serves the built web from `--web` (default `web/dist` in the current folder), or only the API when that folder holds no `index.html`, which it says on stderr. Without `--studio` or `STUDIO_TOKEN` it still serves and says so: songs of the library play, and a new song added to the playlist fails with the reason. The playlist lives in memory and is lost when the server stops. The playlist worker downloads new songs into the library, so never run `stage serve` and `stage sync` on the same library at once (nothing enforces it). `uv run stage serve --help` lists the options.
+
+The screens are `/karaoke` (home), `/karaoke/stage` (setup, then the song playing) and `/karaoke/stage/results`; `/` goes to `/karaoke`. To work on them, run `stage serve` on its default port and `npm run dev` in `web/`: the Vite dev server sends `/api` to `http://127.0.0.1:8791`. There is no front end test runner: the logic lives in the Stage API and its tests, and the screens are proven by `npm run build` and in a browser.
 
 CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

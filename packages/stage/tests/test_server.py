@@ -1,3 +1,5 @@
+import logging
+import shutil
 from pathlib import Path
 
 import pytest
@@ -64,9 +66,80 @@ def test_state_of_a_new_stage(stage) -> None:
             "duration_s": None,
             "error": None,
             "detail": None,
+            "stems": [],
         },
         "playlist": [],
     }
+
+
+def test_state_lists_the_stems_of_the_song_of_the_session_in_setup(stage) -> None:
+    stage.client.post(
+        "/api/playlist",
+        json={
+            "title": "New Song",
+            "artist": "Artist Name",
+            "origin": "ytmusic",
+            "video_id": "YYYYYYYYYYY",
+        },
+    )
+    not_in_library = stage.client.get("/api/state").json()["session"]
+    stage.client.post("/api/session/skip")
+    stage.add(FIRST)
+    in_setup = stage.client.get("/api/state").json()["session"]
+    stage.client.post("/api/session/start")
+    playing = stage.client.get("/api/state").json()["session"]
+
+    assert not_in_library["stems"] == []
+    assert in_setup["stems"] == list(STEMS)
+    assert playing["stems"] == []
+
+
+def test_state_reads_only_the_manifest_of_the_song_of_the_session(
+    stage, caplog
+) -> None:
+    broken = stage.library / "broken-song--artist-name--0a0b0c"
+    broken.mkdir()
+    (broken / "manifest.json").write_text("{", encoding="utf-8")
+    stage.add(FIRST)
+    # Adding a song scans the library, which warns about the broken package.
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        session = stage.client.get("/api/state").json()["session"]
+
+    assert session["stems"] == list(STEMS)
+    assert caplog.messages == []
+
+
+def test_state_has_no_stems_for_a_missing_or_invalid_manifest(stage, caplog) -> None:
+    stage.add(FIRST)
+    manifest = stage.library / FIRST / "manifest.json"
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        manifest.write_text("{", encoding="utf-8")
+        invalid = stage.client.get("/api/state").json()["session"]
+        manifest.unlink()
+        missing = stage.client.get("/api/state").json()["session"]
+
+    assert invalid["stems"] == []
+    assert missing["stems"] == []
+    assert caplog.messages == []
+
+
+def test_state_reads_no_manifest_outside_the_library(stage) -> None:
+    shutil.copytree(stage.library / FIRST, stage.library.parent / FIRST)
+    stage.client.post(
+        "/api/playlist",
+        json={
+            "title": "New Song",
+            "artist": "Artist Name",
+            "origin": "ytmusic",
+            "video_id": "YYYYYYYYYYY",
+            "song_id": f"../{FIRST}",
+        },
+    )
+
+    assert stage.client.get("/api/state").json()["session"]["stems"] == []
 
 
 def test_adding_a_library_song_makes_a_ready_entry(stage) -> None:

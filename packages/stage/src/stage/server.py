@@ -11,17 +11,18 @@ from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
+from core.manifest import Manifest
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from starlette.exceptions import HTTPException
 
 from stage import library as lib
 from stage.lyrics import song_lyrics
 from stage.playlist import Entry, NotAddable, Playlist
 from stage.search import Found, Origin, Result, library_results
-from stage.session import Session, SessionError
+from stage.session import Session, SessionError, SessionView
 
 STATUS = {
     "unknown_entry": 404,
@@ -111,13 +112,25 @@ def create_app(
     def session_refused(request: Request, error: SessionError) -> Response:
         return refusal(error.code, error.detail)
 
-    def stems(entry_id: str | None) -> list[str]:
-        """The stems of the entry's package, none while it is not in the library."""
-        entry = None if entry_id is None else playlist.get(entry_id)
+    def stems(view: SessionView) -> list[str]:
+        """The stems the setup offers to mute: those of the entry's manifest.
+
+        Only the setup shows them, and the screens poll often, so only the
+        manifest of that entry is read, and only in setup. None while its
+        package is not in the library or its manifest is invalid.
+        """
+        if view.state != "setup" or view.entry_id is None:
+            return []
+        entry = playlist.get(view.entry_id)
         if entry is None or entry.song.song_id is None:
             return []
-        song = lib.scan(library).get(entry.song.song_id)
-        return [] if song is None else list(song.manifest.stems)
+        if not lib.is_song_id(entry.song.song_id):
+            return []
+        try:
+            raw = (library / entry.song.song_id / "manifest.json").read_bytes()
+            return list(Manifest.model_validate_json(raw).stems)
+        except (OSError, ValidationError):
+            return []
 
     def state() -> dict:
         view = session.view()
@@ -125,7 +138,7 @@ def create_app(
             "session": {
                 **asdict(view),
                 "muted": list(view.muted),
-                "stems": stems(view.entry_id),
+                "stems": stems(view),
             },
             "playlist": [entry_json(entry) for entry in playlist.entries()],
         }

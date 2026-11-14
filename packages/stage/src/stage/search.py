@@ -96,9 +96,7 @@ def find(query: str, library: Path, ytmusic: Client, ytdlp: Client) -> Found:
     words = _normalize(query).split()
     if not words:
         return Found([])
-    entries = [
-        _from_library(song_id, song) for song_id, song in lib.scan(library).items()
-    ]
+    entries = library_results(library)
     ready = [entry for entry in entries if _matches(words, entry)]
     by_video_id = {entry.video_id: entry for entry in entries if entry.video_id}
 
@@ -144,7 +142,12 @@ def _matches(words: list[str], entry: Result) -> bool:
     return all(word in searchable for word in words)
 
 
-def _from_library(song_id: str, song: lib.Song) -> Result:
+def library_results(library: Path) -> list[Result]:
+    """Every song of the library, as a search shows it."""
+    return [from_library(song_id, song) for song_id, song in lib.scan(library).items()]
+
+
+def from_library(song_id: str, song: lib.Song) -> Result:
     manifest = song.manifest
     source = manifest.source
     return Result(

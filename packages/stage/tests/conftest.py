@@ -1,6 +1,8 @@
 import hashlib
 import json
 import shutil
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote
@@ -297,3 +299,135 @@ class FakeReaper:
 @pytest.fixture
 def reaper() -> FakeReaper:
     return FakeReaper()
+
+
+STEMS = ("lead", "backing", "drums", "bass", "guitar", "piano", "other")
+
+
+class Packages:
+    """A Stage library of packages of the 7 stems with placeholder hashes."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def add(
+        self,
+        song_id: str,
+        *,
+        title: str = "Song Title",
+        video_id: str = "XXXXXXXXXXX",
+        duration_s: float = 245.3,
+        lyrics: str | None = None,
+    ) -> str:
+        """Synced lyrics are written when given."""
+        return _add_package(self.path, song_id, title, video_id, duration_s, lyrics)
+
+
+@pytest.fixture
+def packages(tmp_path: Path) -> Packages:
+    return Packages(tmp_path / "songs")
+
+
+def _add_package(
+    library: Path,
+    song_id: str,
+    title: str,
+    video_id: str,
+    duration_s: float,
+    lyrics: str | None,
+) -> str:
+    package = library / song_id
+    package.mkdir(parents=True)
+    manifest = {
+        "schema": 1,
+        "pipeline_version": 1,
+        "id": song_id,
+        "title": title,
+        "artist": "Artist Name",
+        "duration_s": duration_s,
+        "source": {"type": "youtube_music", "video_id": video_id},
+        "gain_db": 0.0,
+        "stems": {
+            stem: {"file": f"stems/{stem}.flac", "sha256": "0" * 64} for stem in STEMS
+        },
+        "models": {"vocals": "a", "karaoke": "b", "instrumental": "c"},
+        "created_at": CREATED_AT,
+    }
+    if lyrics is not None:
+        (package / "lyrics.lrc").write_text(lyrics, encoding="utf-8")
+        manifest["lyrics"] = {
+            "provider": "lrclib",
+            "file": "lyrics.lrc",
+            "synced": True,
+        }
+    (package / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return song_id
+
+
+class FakePlayer:
+    """A Player that records its calls and catches two calls at once.
+
+    position() returns positions in order, the last one repeating; ended()
+    turns true once positions are used up, when end is set. failures maps a
+    method name to the exception it raises. Each call holds for delay_s, so
+    a call made while another runs shows up in overlaps.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.positions: list[float] = [0.0]
+        self.end = False
+        self.failures: dict[str, Exception] = {}
+        self.delay_s = 0.0
+        self.overlaps = 0
+        self._reads = 0
+        self._active = 0
+        self._counter = threading.Lock()
+
+    def _call(self, name: str, *args) -> None:
+        with self._counter:
+            self._active += 1
+            if self._active > 1:
+                self.overlaps += 1
+        try:
+            if self.delay_s:
+                time.sleep(self.delay_s)
+            if name in self.failures:
+                raise self.failures[name]
+            self.calls.append((name, *args))
+        finally:
+            with self._counter:
+                self._active -= 1
+
+    def load(self, manifest: Path) -> None:
+        self._call("load", manifest)
+
+    def play(self) -> None:
+        self._reads = 0
+        self._call("play")
+
+    def stop(self) -> None:
+        self._call("stop")
+
+    def set_mute(self, stem: str, muted: bool) -> None:
+        self._call("set_mute", stem, muted)
+
+    def transpose(self, semitones: int) -> None:
+        self._call("transpose", semitones)
+
+    def position(self) -> float:
+        self._call("position")
+        self._reads += 1
+        return self.positions[min(self._reads, len(self.positions)) - 1]
+
+    def ended(self) -> bool:
+        self._call("ended")
+        return self.end and self._reads >= len(self.positions)
+
+    def names(self) -> list[str]:
+        return [call[0] for call in self.calls]
+
+
+@pytest.fixture
+def player() -> FakePlayer:
+    return FakePlayer()

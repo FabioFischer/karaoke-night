@@ -6,9 +6,11 @@ from urllib.parse import unquote
 import httpx2
 import pytest
 from stage.player import (
+    ListenerSilent,
     Player,
     ReaperError,
     ReaperPlayer,
+    ReaperUnreachable,
     Track,
     Transport,
     encode_command,
@@ -473,3 +475,19 @@ def test_an_error_answer_from_reaper_is_an_error() -> None:
 
 def test_the_default_address_is_ipv4_loopback() -> None:
     assert ReaperPlayer().base_url == "http://127.0.0.1:8080"
+
+
+def test_an_unreachable_reaper_and_a_silent_listener_are_told_apart(reaper) -> None:
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("connection refused", request=request)
+
+    unreachable = ReaperPlayer(
+        http=httpx2.Client(transport=httpx2.MockTransport(refuse))
+    )
+    reaper.acks = lambda command: [""]
+    silent = connected(reaper, ack_timeout_s=0.05)
+
+    with pytest.raises(ReaperUnreachable):
+        unreachable.connect()
+    with pytest.raises(ListenerSilent):
+        silent.ping()

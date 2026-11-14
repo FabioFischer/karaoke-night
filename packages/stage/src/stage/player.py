@@ -59,6 +59,14 @@ class ReaperError(Exception):
     """REAPER could not be reached, or did not do what it was asked."""
 
 
+class ReaperUnreachable(ReaperError):
+    """REAPER's web interface did not answer."""
+
+
+class ListenerSilent(ReaperError):
+    """The karaoke listener did not acknowledge a command in time."""
+
+
 class Track(NamedTuple):
     index: int
     name: str
@@ -246,7 +254,7 @@ class ReaperPlayer:
             if isinstance(ack, dict) and ack.get("id") == command["id"]:
                 break
             if time.monotonic() >= deadline:
-                raise ReaperError(
+                raise ListenerSilent(
                     "the karaoke listener in REAPER did not answer the "
                     f"{op} command within {self._ack_timeout_s:g} s; restart it: "
                     "run reaper/scripts/karaoke_listener.lua from REAPER's "
@@ -263,7 +271,7 @@ class ReaperPlayer:
         try:
             response = self._http.get(f"{self.base_url}/_/{commands}")
         except _UNREACHABLE as error:
-            raise ReaperError(
+            raise ReaperUnreachable(
                 f"could not reach REAPER's web interface at {self.base_url} "
                 f"({error}); is REAPER open, with the web interface on port 8080 "
                 "(reaper/README.md)?"

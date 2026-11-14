@@ -1,10 +1,12 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx2
 import pytest
-from core.studio_api import SongSummary
-from stage.client import StudioClient, StudioError
+from core.manifest import YouTubeMusicSource
+from core.studio_api import Job, JobRequest, SongSummary
+from stage.client import StudioClient, StudioError, UnknownJob
 
 SONG = "song-title--artist-name--a1b2c3"
 LEAD = "stems/lead.flac"
@@ -204,3 +206,101 @@ def test_the_base_url_may_end_in_a_slash(studio) -> None:
         assert [song.id for song in client.songs()] == [SONG]
 
     assert studio.requests[0].url.path == "/songs"
+
+
+def job_request(video_id: str = "XXXXXXXXXXX") -> JobRequest:
+    return JobRequest(
+        source=YouTubeMusicSource(type="youtube_music", video_id=video_id),
+        title="Song Title",
+        artist="Artist Name",
+        album="Album Name",
+        duration_s=245.3,
+    )
+
+
+def test_create_job_posts_the_request(studio) -> None:
+    with studio.client() as client:
+        created = client.create_job(job_request("YYYYYYYYYYY"))
+
+    (request,) = studio.requests
+    assert request.method == "POST"
+    assert request.url.path == "/jobs"
+    assert request.headers["authorization"] == "Bearer test-token"
+    assert json.loads(request.content) == {
+        "source": {"type": "youtube_music", "video_id": "YYYYYYYYYYY"},
+        "title": "Song Title",
+        "artist": "Artist Name",
+        "album": "Album Name",
+        "duration_s": 245.3,
+    }
+    assert created.song_id == "song-title--artist-name--" + created.song_id[-6:]
+
+
+def test_job_reads_the_job_the_studio_created(studio) -> None:
+    with studio.client() as client:
+        created = client.create_job(job_request("YYYYYYYYYYY"))
+        job = client.job(created.job_id)
+
+    assert job == Job(
+        job_id=created.job_id, song_id=created.song_id, status="queued", attempt=0
+    )
+
+
+def test_a_job_for_a_song_in_the_studio_library_is_done(studio) -> None:
+    studio.add(SONG)
+
+    with studio.client() as client:
+        created = client.create_job(job_request("XXXXXXXXXXX"))
+        job = client.job(created.job_id)
+
+    assert created.song_id == SONG
+    assert job.status == "done"
+
+
+def test_an_unknown_job_is_its_own_error(studio) -> None:
+    with studio.client() as client, pytest.raises(UnknownJob) as caught:
+        client.job("0" * 32)
+
+    assert isinstance(caught.value, StudioError)
+    assert str(caught.value) == "the Studio answered 404: unknown job"
+
+
+def test_create_job_on_an_unreachable_studio_is_a_studio_error() -> None:
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("connection refused", request=request)
+
+    http = httpx2.Client(transport=httpx2.MockTransport(refuse))
+
+    client = StudioClient("http://studio.invalid:8790", "token", http=http)
+    with client, pytest.raises(StudioError) as caught:
+        client.create_job(job_request())
+
+    assert str(caught.value) == "could not reach the Studio (connection refused)"
+
+
+def test_an_invalid_job_answer_is_a_studio_error() -> None:
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"job_id": "only-an-id"})
+
+    http = httpx2.Client(transport=httpx2.MockTransport(answer))
+
+    client = StudioClient("http://studio.invalid:8790", "token", http=http)
+    with client:
+        with pytest.raises(StudioError) as created:
+            client.create_job(job_request())
+        with pytest.raises(StudioError) as read:
+            client.job("only-an-id")
+
+    assert str(created.value).startswith("the Studio sent an invalid job (")
+    assert str(read.value).startswith("the Studio sent an invalid job (")
+
+
+def test_download_reports_each_chunk_it_writes(studio, tmp_path: Path) -> None:
+    studio.add(SONG)
+    whole = studio.file(SONG, LEAD).read_bytes()
+    chunks: list[int] = []
+
+    with studio.client() as client:
+        received = client.download(SONG, LEAD, tmp_path / "lead.flac", chunks.append)
+
+    assert sum(chunks) == received == len(whole)

@@ -315,6 +315,29 @@ def test_stop_with_reaper_gone_still_shows_the_results(
     assert session.view().error == "reaper_unreachable"
 
 
+def test_a_reaper_error_in_play_next_leaves_the_setup_of_the_next_song(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    following = playlist.add(library_song(SECOND))
+    session.configure(["drums"], 3)
+    session.start()
+    session.stop()
+    player.failures["load"] = ListenerSilent("the listener did not answer")
+
+    refused(session.play_next, "listener_silent")
+
+    assert [entry.id for entry in playlist.entries()] == [following.id]
+    view = session.view()
+    assert (view.state, view.entry_id, view.muted, view.key, view.error) == (
+        "setup",
+        following.id,
+        ("drums",),
+        0,
+        "listener_silent",
+    )
+
+
 def test_a_failed_poll_keeps_playing_and_shows_the_error(
     session, playlist, player
 ) -> None:

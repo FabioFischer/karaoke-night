@@ -136,7 +136,9 @@ class Session:
     def play_next(self) -> None:
         """Remove the song played and play the next with its mutes, at key 0.
 
-        A refusal (no_song, not_ready) changes nothing.
+        A refusal (no_song, not_ready) changes nothing. A REAPER error comes
+        after the song played was removed: the session stays in the setup of
+        the next song, with the mutes kept, key 0 and the error.
         """
         with self._lock:
             self._require("results")

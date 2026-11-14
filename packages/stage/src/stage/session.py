@@ -118,7 +118,8 @@ class Session:
     def start(self) -> None:
         with self._lock:
             self._require("setup")
-            self._start(self._playlist.first())
+            entry = self._playlist.first()
+            self._play(entry, self._package(entry))
 
     def stop(self) -> None:
         """Always ends in the results; a REAPER error is still raised."""
@@ -133,16 +134,19 @@ class Session:
             self._set(state="results", error=None, detail=None)
 
     def play_next(self) -> None:
-        """Remove the song played and play the next with its mutes, at key 0."""
+        """Remove the song played and play the next with its mutes, at key 0.
+
+        A refusal (no_song, not_ready) changes nothing.
+        """
         with self._lock:
             self._require("results")
             following = self._following()
             if following is None:
                 raise SessionError("no_song", "no song after this one in the playlist")
-            _require_ready(following)
+            song = self._package(following)
             self._playlist.remove(self._entry_id)
             self._set(state="setup", entry_id=None, key=0, position_s=None)
-            self._start(following)
+            self._play(following, song)
 
     def setup_next(self) -> None:
         with self._lock:
@@ -179,7 +183,8 @@ class Session:
         with self._lock:
             self._generation += 1
 
-    def _start(self, entry: Entry | None) -> None:
+    def _package(self, entry: Entry | None) -> lib.Song:
+        """The package entry plays, or the refusal: no_song or not_ready."""
         if entry is None:
             raise SessionError("no_song", "the playlist is empty")
         _require_ready(entry)
@@ -188,6 +193,9 @@ class Session:
             raise SessionError(
                 "not_ready", f"{entry.song.song_id} is no longer in the library"
             )
+        return song
+
+    def _play(self, entry: Entry, song: lib.Song) -> None:
         try:
             self._player.load((song.folder / "manifest.json").resolve())
             # Every stem is set, so the mutes of the previous song do not stay.

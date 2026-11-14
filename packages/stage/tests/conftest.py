@@ -392,8 +392,10 @@ class FakePlayer:
         try:
             if self.delay_s:
                 time.sleep(self.delay_s)
-            if name in self.failures:
-                raise self.failures[name]
+            # One lookup: a test may remove the failure while a thread calls.
+            failure = self.failures.get(name)
+            if failure is not None:
+                raise failure
             self.calls.append((name, *args))
         finally:
             with self._counter:

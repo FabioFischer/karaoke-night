@@ -1,3 +1,4 @@
+import shutil
 import threading
 import time
 
@@ -184,6 +185,30 @@ def test_play_next_of_a_song_not_ready_changes_nothing(
     assert session.view().state == "results"
 
 
+def test_play_next_of_a_song_gone_from_the_library_changes_nothing(
+    session, playlist, packages, player
+) -> None:
+    finished = playlist.add(library_song(FIRST))
+    following = playlist.add(library_song(SECOND))
+    session.configure(["drums"], 3)
+    session.start()
+    session.stop()
+    shutil.rmtree(packages.path / SECOND)
+    calls = len(player.calls)
+
+    refused(session.play_next, "not_ready")
+
+    assert [entry.id for entry in playlist.entries()] == [finished.id, following.id]
+    view = session.view()
+    assert (view.state, view.entry_id, view.muted, view.key) == (
+        "results",
+        finished.id,
+        ("drums",),
+        3,
+    )
+    assert len(player.calls) == calls
+
+
 def test_play_next_without_a_next_song_is_refused(session, playlist) -> None:
     playlist.add(library_song(FIRST))
     session.start()
@@ -333,6 +358,30 @@ def test_the_follower_thread_moves_to_the_results(playlist, packages, player) ->
 
     assert session.view().state == "results"
     assert session.view().position_s == 1.5
+
+
+def test_the_follower_thread_outlives_a_failed_read(playlist, packages, player) -> None:
+    session = Session(playlist, packages.path, player, poll_s=0.001)
+    playlist.add(library_song(FIRST))
+    player.failures["position"] = ReaperUnreachable("could not reach REAPER")
+    player.positions = [2.5]
+    player.end = True
+
+    session.start()
+    deadline = time.monotonic() + 5
+    while session.view().error is None and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert (session.view().state, session.view().error) == (
+        "playing",
+        "reaper_unreachable",
+    )
+    del player.failures["position"]
+    while session.view().state == "playing" and time.monotonic() < deadline:
+        time.sleep(0.001)
+    session.close()
+
+    assert (session.view().state, session.view().position_s) == ("results", 2.5)
+    assert session.view().error is None
 
 
 def test_player_calls_never_overlap(playlist, packages, player) -> None:

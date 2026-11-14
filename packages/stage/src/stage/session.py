@@ -11,6 +11,7 @@ through one lock: actions and the position polls never overlap.
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -39,8 +40,9 @@ class SessionView:
     """What the screen shows of the session.
 
     entry_id is the song of the session: the first entry in setup, the one
-    played in playing and results. error and detail are the last failure,
-    cleared by the next action or poll that works.
+    played in playing and results. position_at_s is when REAPER reported
+    position_s, in the session's clock (time.monotonic). error and detail are
+    the last failure, cleared by the next action or poll that works.
     """
 
     state: SessionState
@@ -51,6 +53,7 @@ class SessionView:
     duration_s: float | None
     error: str | None
     detail: str | None
+    position_at_s: float | None = None
 
 
 def reaper_code(error: ReaperError) -> str:
@@ -72,12 +75,14 @@ class Session:
         *,
         poll_s: float = POLL_S,
         follow: bool = True,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._playlist = playlist
         self._library = library
         self._player = player
         self._poll_s = poll_s
         self._follow = follow
+        self._clock = clock
         # Held for every action and every Player call. Taken before _fields.
         self._lock = threading.Lock()
         self._fields = threading.Lock()
@@ -86,6 +91,7 @@ class Session:
         self._muted: tuple[str, ...] = DEFAULT_MUTED
         self._key = 0
         self._position_s: float | None = None
+        self._position_at_s: float | None = None
         self._duration_s: float | None = None
         self._error: str | None = None
         self._detail: str | None = None
@@ -108,6 +114,7 @@ class Session:
                 duration_s,
                 self._error,
                 self._detail,
+                self._position_at_s,
             )
 
     def configure(self, muted: list[str], key: int) -> None:
@@ -147,7 +154,13 @@ class Session:
                 raise SessionError("no_song", "no song after this one in the playlist")
             song = self._package(following)
             self._playlist.remove(self._entry_id)
-            self._set(state="setup", entry_id=None, key=0, position_s=None)
+            self._set(
+                state="setup",
+                entry_id=None,
+                key=0,
+                position_s=None,
+                position_at_s=None,
+            )
             self._play(following, song)
 
     def setup_next(self) -> None:
@@ -212,6 +225,7 @@ class Session:
             state="playing",
             entry_id=entry.id,
             position_s=0.0,
+            position_at_s=self._clock(),
             duration_s=song.manifest.duration_s,
             error=None,
             detail=None,
@@ -236,15 +250,26 @@ class Session:
         if generation != self._generation or self._state != "playing":
             return False
         try:
+            asked = self._clock()
             position = self._player.position()
+            # REAPER read the position somewhere within the request.
+            position_at_s = (asked + self._clock()) / 2
             ended = self._player.ended()
         except ReaperError as error:
             self._set(error=reaper_code(error), detail=str(error))
             return True
         if ended:
-            self._set(state="results", position_s=position, error=None, detail=None)
+            self._set(
+                state="results",
+                position_s=position,
+                position_at_s=position_at_s,
+                error=None,
+                detail=None,
+            )
             return False
-        self._set(position_s=position, error=None, detail=None)
+        self._set(
+            position_s=position, position_at_s=position_at_s, error=None, detail=None
+        )
         return True
 
     def _following(self) -> Entry | None:
@@ -260,6 +285,7 @@ class Session:
             muted=DEFAULT_MUTED,
             key=0,
             position_s=None,
+            position_at_s=None,
             duration_s=None,
             error=None,
             detail=None,

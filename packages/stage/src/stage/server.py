@@ -134,9 +134,13 @@ def create_app(
 
     def state() -> dict:
         view = session.view()
+        fields = asdict(view)
+        # The session's own clock means nothing to a screen; the public anchor
+        # carries the time in the store's clock.
+        del fields["position_at_s"]
         return {
             "session": {
-                **asdict(view),
+                **fields,
                 "muted": list(view.muted),
                 "stems": stems(view),
             },

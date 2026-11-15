@@ -26,6 +26,11 @@ export function uncachedJson(text: string, status = 200): Response {
   })
 }
 
+/** A body or path the route cannot read. */
+export function invalidRequest(): Response {
+  return uncachedJson(JSON.stringify({ error: 'invalid_request' }), 422)
+}
+
 /** The store failed: logged for Vercel's logs, 503 for the phone. */
 export function storeUnavailable(error: StoreError): Response {
   console.error(error.message)

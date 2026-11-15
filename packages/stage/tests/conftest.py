@@ -11,6 +11,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from stage.client import StudioClient
+from stage.store import Store
 from studio.api import create_app
 from studio.jobs import JobQueue
 
@@ -433,3 +434,84 @@ class FakePlayer:
 @pytest.fixture
 def player() -> FakePlayer:
     return FakePlayer()
+
+
+STORE_URL = "https://store.invalid"
+STORE_TOKEN = "test-store-token"
+
+
+class FakeStore:
+    """The Upstash Redis REST API over a dict, as a MockTransport.
+
+    It knows the commands the Stage sends: SET (with EX), GET, DEL, LPOP,
+    RPUSH and TIME. commands holds every command received, values the
+    strings stored, expiry the EX of each key set with one. now_ms is what
+    TIME answers. down makes every request fail as an unreachable host does,
+    and on_command, when set, runs before each command with it.
+    """
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
+        self.expiry: dict[str, int] = {}
+        self.commands: list[list] = []
+        self.now_ms = 1_700_000_000_000.0
+        self.down = False
+        self.on_command: Callable[[list], None] | None = None
+
+    def http(self) -> httpx2.Client:
+        return httpx2.Client(transport=httpx2.MockTransport(self.handle))
+
+    def client(self, token: str = STORE_TOKEN) -> Store:
+        return Store(STORE_URL, token, http=self.http())
+
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
+        if self.down:
+            raise httpx2.ConnectError("the store is down", request=request)
+        assert str(request.url) == STORE_URL, request.url
+        assert request.method == "POST"
+        if request.headers.get("authorization") != f"Bearer {STORE_TOKEN}":
+            return httpx2.Response(401, json={"error": "Unauthorized"})
+        command = json.loads(request.content)
+        self.commands.append(command)
+        if self.on_command is not None:
+            self.on_command(command)
+        return httpx2.Response(200, json={"result": self._run(*command)})
+
+    def _run(self, name: str, *args):
+        if name == "SET":
+            key, value, *options = args
+            self.values[key] = value
+            self.expiry.pop(key, None)
+            if options:
+                assert options[0] == "EX", options
+                self.expiry[key] = options[1]
+            return "OK"
+        if name == "GET":
+            return self.values.get(args[0])
+        if name == "DEL":
+            found = args[0] in self.values or args[0] in self.lists
+            self.values.pop(args[0], None)
+            self.lists.pop(args[0], None)
+            return int(found)
+        if name == "LPOP":
+            items = self.lists.get(args[0])
+            return items.pop(0) if items else None
+        if name == "RPUSH":
+            self.lists.setdefault(args[0], []).extend(args[1:])
+            return len(self.lists[args[0]])
+        if name == "TIME":
+            seconds, micro = divmod(round(self.now_ms * 1000), 1_000_000)
+            return [str(seconds), str(micro)]
+        raise AssertionError(f"unexpected command {name}")
+
+    def json(self, key: str):
+        return json.loads(self.values[key])
+
+    def names(self) -> list[str]:
+        return [command[0] for command in self.commands]
+
+
+@pytest.fixture
+def store() -> FakeStore:
+    return FakeStore()

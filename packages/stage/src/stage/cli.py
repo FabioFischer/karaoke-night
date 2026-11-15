@@ -15,8 +15,10 @@ from stage import search
 from stage.client import StudioClient, StudioError
 from stage.player import Player, ReaperError, ReaperPlayer
 from stage.playlist import Playlist
+from stage.public import Publisher, RequestReader, StoreClock
 from stage.server import create_app
 from stage.session import Session
+from stage.store import Store
 from stage.sync import Outcome, sync
 
 DEFAULT_LIBRARY = Path("library")
@@ -26,6 +28,8 @@ HOST = "127.0.0.1"
 # REAPER's web interface is on 8080, the Studio API on 8790.
 DEFAULT_PORT = 8791
 TOKEN_VARIABLE = "STUDIO_TOKEN"
+STORE_URL_VARIABLE = "KARAOKE_STORE_URL"
+STORE_TOKEN_VARIABLE = "KARAOKE_STORE_TOKEN"
 POLL_INTERVAL_S = 0.25
 ACK_TIMEOUT_S = 5.0
 # 128 + SIGINT, as shells report a command stopped with Ctrl+C.
@@ -103,8 +107,10 @@ def build_parser() -> argparse.ArgumentParser:
             "playlist, the session that plays it in REAPER, search and lyrics. "
             "New songs go to the Studio given by --studio, with the token from the "
             f"{TOKEN_VARIABLE} environment variable; without them, only songs in "
-            "the library can be added. Never run it next to stage sync on the "
-            "same library."
+            "the library can be added. With the public store's REST URL and token "
+            f"in {STORE_URL_VARIABLE} and {STORE_TOKEN_VARIABLE}, it also publishes "
+            "the playlist to the public page and applies the requests left there. "
+            "Never run it next to stage sync on the same library."
         ),
     )
     serve_command.add_argument(
@@ -328,6 +334,18 @@ def serve(args: argparse.Namespace, http: httpx2.Client | None) -> int:
             "serving the API only",
             file=sys.stderr,
         )
+    store_url = os.environ.get(STORE_URL_VARIABLE)
+    store_token = os.environ.get(STORE_TOKEN_VARIABLE)
+    # Its threads may be in a request when the server stops, so it is never
+    # closed: the process ending closes its connections.
+    store = Store(store_url, store_token) if store_url and store_token else None
+    if store is None:
+        print(
+            f"stage serve: no public store (the {STORE_URL_VARIABLE} and "
+            f"{STORE_TOKEN_VARIABLE} environment variables); nothing is published "
+            "and no public request is read",
+            file=sys.stderr,
+        )
 
     def find(text: str) -> search.Found:
         return search.find(
@@ -337,11 +355,23 @@ def serve(args: argparse.Namespace, http: httpx2.Client | None) -> int:
     player = ReaperPlayer(http=http, ack_timeout_s=ACK_TIMEOUT_S)
     playlist = Playlist(args.library, studio)
     session = Session(playlist, args.library, player)
+    public = []
+    if store is not None:
+        # The session times its positions on the store clock's local clock.
+        clock = StoreClock(store)
+        public = [
+            Publisher(store, clock, args.library, playlist, session),
+            RequestReader(store, clock, playlist, session, find),
+        ]
     playlist.start()
+    for worker in public:
+        worker.start()
     try:
         app = create_app(args.library, playlist, session, web=web, find=find)
         run_server(app, HOST, args.port)
     finally:
+        for worker in public:
+            worker.stop()
         playlist.stop()
         session.close()
         player.close()

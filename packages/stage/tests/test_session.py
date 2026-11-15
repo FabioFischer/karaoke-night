@@ -1,3 +1,4 @@
+import inspect
 import shutil
 import threading
 import time
@@ -435,3 +436,73 @@ def test_the_fake_player_sees_two_calls_at_once(player) -> None:
         thread.join()
 
     assert player.overlaps == 1
+
+
+def ticking(*times: float):
+    """A clock that returns times in order, one per call."""
+    values = iter(times)
+    return lambda: next(values)
+
+
+def test_start_takes_the_time_of_position_zero_after_play(
+    playlist, packages, player
+) -> None:
+    session = Session(
+        playlist, packages.path, player, follow=False, clock=ticking(10.0)
+    )
+    playlist.add(library_song(FIRST))
+
+    session.start()
+
+    view = session.view()
+    assert (view.position_s, view.position_at_s) == (0.0, 10.0)
+
+
+def test_a_poll_takes_the_time_of_its_read_halfway_through_it(
+    playlist, packages, player
+) -> None:
+    session = Session(
+        playlist, packages.path, player, follow=False, clock=ticking(10.0, 20.0, 20.4)
+    )
+    playlist.add(library_song(FIRST))
+    player.positions = [9.5]
+    session.start()
+
+    session.poll()
+
+    view = session.view()
+    assert view.position_s == 9.5
+    assert view.position_at_s == pytest.approx(20.2)
+
+
+def test_a_failed_poll_keeps_the_time_of_the_last_read(
+    playlist, packages, player
+) -> None:
+    session = Session(
+        playlist, packages.path, player, follow=False, clock=ticking(10.0, 20.0, 20.4)
+    )
+    playlist.add(library_song(FIRST))
+    session.start()
+    player.failures["position"] = ReaperUnreachable("could not reach REAPER")
+
+    session.poll()
+
+    assert (session.view().position_s, session.view().position_at_s) == (0.0, 10.0)
+
+
+def test_no_position_time_outside_a_song(session, playlist) -> None:
+    playlist.add(library_song(FIRST))
+    assert session.view().position_at_s is None
+    session.start()
+    session.stop()
+
+    session.setup_next()
+
+    assert session.view().position_at_s is None
+
+
+def test_positions_are_timed_with_the_finest_clock() -> None:
+    # On Windows time.monotonic ticks every 15.6 ms.
+    default = inspect.signature(Session).parameters["clock"].default
+
+    assert default is time.perf_counter

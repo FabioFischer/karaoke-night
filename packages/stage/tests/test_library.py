@@ -113,6 +113,38 @@ def test_a_package_with_an_invalid_manifest_is_skipped_with_a_warning(
     ]
 
 
+BROKEN = "broken-song--artist-name--a1b2c3"
+
+
+def test_every_scan_warns_about_an_invalid_manifest(tmp_path: Path, caplog) -> None:
+    write_song(tmp_path, BROKEN, duration_s="long")
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        lib.scan(tmp_path)
+        lib.scan(tmp_path)
+
+    assert len(caplog.messages) == 2
+
+
+def test_scans_that_share_what_they_warned_warn_once_per_manifest(
+    tmp_path: Path, caplog
+) -> None:
+    write_song(tmp_path, BROKEN, duration_s="long")
+    warned: dict[str, bytes] = {}
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        lib.scan(tmp_path, warned)
+        lib.scan(tmp_path, warned)
+        (tmp_path / BROKEN / "manifest.json").write_text("{", encoding="utf-8")
+        lib.scan(tmp_path, warned)
+        lib.scan(tmp_path, warned)
+
+    assert [message.split(":")[0] for message in caplog.messages] == [
+        f"{BROKEN} is not listed",
+        f"{BROKEN} is not listed",
+    ]
+
+
 def test_a_package_moved_away_while_scanned_is_skipped(
     tmp_path: Path, monkeypatch
 ) -> None:

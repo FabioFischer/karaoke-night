@@ -1,12 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Entry, Lyrics } from '../api'
 import { CallsContext } from '../calls'
+import { clockOffset, isOffline } from './phone-clock'
 import { publicApi, type PublicSession, type Snapshot } from './public-api'
 
 const POLL_MS = 2000
 const CLOCK_SYNC_MS = 60_000
-// The Stage publishes at least every 3 s (docs/PLAN.md section 5.9).
-const OFFLINE_AFTER_MS = 10_000
 
 /** The snapshot as the phone's screens read it. */
 export interface PhoneState {
@@ -21,7 +20,7 @@ interface PublicContextValue {
   state: PhoneState | null
   /** Whether the first poll answered or failed: until then nothing is known. */
   loaded: boolean
-  /** No snapshot, or the last one is more than OFFLINE_AFTER_MS old. */
+  /** No snapshot, or the last one is too old (phone-clock.ts). */
   offline: boolean
   /** The phone's clock corrected to the store's, in milliseconds. */
   storeNow: () => number
@@ -51,7 +50,7 @@ function useStoreClock(): () => number {
       const sent = Date.now()
       try {
         const { now_ms } = await publicApi.time()
-        offset.current = now_ms - (sent + Date.now()) / 2
+        offset.current = clockOffset(now_ms, sent, Date.now())
       } catch {
         // The last offset stays; the snapshot poll shows whether the Stage is reachable.
       }
@@ -112,7 +111,7 @@ export function PublicStateProvider({ children }: { children: ReactNode }) {
     await poll()
   }
 
-  const offline = loaded && (state === null || storeNow() - state.published_at_ms > OFFLINE_AFTER_MS)
+  const offline = loaded && isOffline(state?.published_at_ms ?? null, storeNow())
   const calls = {
     search: publicApi.search,
     library: publicApi.library,

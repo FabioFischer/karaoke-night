@@ -62,17 +62,32 @@ function timeout(ms: number): AbortSignal {
   return controller.signal
 }
 
+/** Leaves the request in the store and gives its id. */
+async function leave(body: PublicRequest): Promise<string> {
+  try {
+    const { id } = await request<{ id: string }>(
+      'POST',
+      '/api/public/requests',
+      body,
+      timeout(CALL_TIMEOUT_MS),
+    )
+    return id
+  } catch (error) {
+    // An add or a remove lost on the way may have been stored all the same:
+    // read as no_answer, so the phone says to check the playlist before trying again.
+    if (error instanceof ApiError && error.code === 'network' && body.op !== 'search') {
+      throw new ApiError('no_answer', error.detail)
+    }
+    throw error
+  }
+}
+
 /**
  * Leaves a request for the Stage and waits for its answer, polling every
  * second. The request may still be applied after the phone gives up.
  */
 async function ask(body: PublicRequest): Promise<Answer> {
-  const { id } = await request<{ id: string }>(
-    'POST',
-    '/api/public/requests',
-    body,
-    timeout(CALL_TIMEOUT_MS),
-  )
+  const id = await leave(body)
   const deadline = Date.now() + ANSWER_TIMEOUT_MS
   while (Date.now() < deadline) {
     await sleep(ANSWER_POLL_MS)

@@ -14,6 +14,11 @@ describe('the phone error messages', () => {
     expect(phoneErrorMessage('entry_playing')).not.toMatch(/pare/i)
   })
 
+  it('says an expired request was not applied and can be sent again', () => {
+    expect(phoneErrorMessage('expired')).not.toMatch(/fila/i)
+    expect(phoneErrorMessage('expired')).toMatch(/tente de novo/i)
+  })
+
   it('does not send a search that got no answer to the playlist', () => {
     expect(phoneErrorMessage('search_no_answer')).not.toMatch(/fila/i)
   })

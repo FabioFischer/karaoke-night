@@ -168,6 +168,68 @@ describe('a fetch that never answers', () => {
   })
 })
 
+describe('a request whose POST never answers', () => {
+  /** The function stores the request, but its 202 arrives only after the phone gave up. */
+  function stubLatePost() {
+    vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return Promise.resolve(pending())
+      return new Promise((resolve, reject) => {
+        setTimeout(() => resolve(json(202, { id: 'r1' })), 5_500)
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+      })
+    })
+  }
+
+  it.each([
+    ['an add', () => publicApi.add(SONG)],
+    ['a remove', () => publicApi.remove('e1')],
+  ])('gives %s up after 5 s as no_answer: it may be stored', async (_name, call) => {
+    stubLatePost()
+    const outcome = settle<unknown>(call())
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(outcome.error).toMatchObject({ code: 'no_answer' })
+  })
+
+  it('gives a search up after 5 s as network', async () => {
+    stubLatePost()
+    const outcome = settle(publicApi.search('words'))
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(outcome.error).toMatchObject({ code: 'network' })
+  })
+})
+
+describe('an answer whose body is cut by the timeout', () => {
+  /** A 200 whose body never ends, until the call is given up. */
+  function stalledBody(init?: RequestInit): Response {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"ok":'))
+        init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason))
+      },
+    })
+    return new Response(body, { status: 200 })
+  }
+
+  it('fails the snapshot as network, not as an empty answer', async () => {
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => stalledBody(init))
+    const outcome = settle(publicApi.state())
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(outcome.error).toMatchObject({ code: 'network' })
+  })
+
+  it('keeps polling an answer through a cut body', async () => {
+    let polls = 0
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return json(202, { id: 'r1' })
+      polls += 1
+      return polls === 1 ? stalledBody(init) : json(200, { ok: true })
+    })
+    const outcome = settle(publicApi.remove('e1'))
+    await vi.advanceTimersByTimeAsync(7_000)
+    expect(outcome).toMatchObject({ done: true, value: { ok: true } })
+  })
+})
+
 describe('the snapshot', () => {
   it('is null before the Stage published one', async () => {
     vi.stubGlobal('fetch', async () => json(200, { version: 1, snapshot: null }))

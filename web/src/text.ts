@@ -163,7 +163,7 @@ const phoneErrorMessages: Record<string, string> = {
   http_error: 'O karaokê respondeu com um erro. Tente de novo.',
   entry_playing: 'Essa música já começou e não pode mais sair da fila.',
   store_unavailable: 'O karaokê está fora do ar agora.',
-  expired: 'O pedido demorou demais para chegar ao palco. Confira a fila antes de tentar de novo.',
+  expired: 'O pedido demorou demais para chegar ao palco e não foi feito. Tente de novo.',
   no_answer: 'Não foi possível concluir o pedido. Confira a fila antes de tentar de novo.',
   search_no_answer: 'A busca demorou demais. Tente de novo.',
 }

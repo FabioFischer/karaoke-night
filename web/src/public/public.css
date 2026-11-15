@@ -1,0 +1,97 @@
+/* The public page on a phone: the TV's look, at a phone's size, with the tabs at the bottom. */
+
+:root {
+  font-size: 16px;
+}
+
+h1 {
+  font-size: 1.6rem;
+}
+
+.phone {
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+}
+
+.phone-main {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: 1rem;
+  min-height: 0;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.phone-search,
+.phone-queue {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.phone-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 2px solid var(--border);
+}
+
+.phone-tabs .tab {
+  min-height: 3rem;
+}
+
+.phone .current-song {
+  padding: 1rem;
+}
+
+.phone .artist {
+  font-size: 1.1rem;
+}
+
+/* Playing: the song on top, the lyrics filling the rest */
+
+.phone-main:has(> .phone-playing) {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  padding: 0;
+}
+
+.phone-playing {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.phone-playing .playing-song {
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+}
+
+/* Less room around the lines than the TV's: the song and the tabs take part of the height. */
+.phone .lyrics-synced {
+  padding-block: 30svh;
+  font-size: 1.4rem;
+}
+
+.phone .lyrics-unsynced,
+.phone .lyrics-message {
+  font-size: 1.2rem;
+}
+
+/* Search results: the add button under the song when the screen is narrow */
+
+.phone .song-item {
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+
+.phone .song-item > button {
+  grid-column: 1 / -1;
+}
+
+.phone .thumbnail {
+  width: 3.5rem;
+  height: 3.5rem;
+}

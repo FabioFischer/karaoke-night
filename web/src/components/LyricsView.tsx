@@ -38,6 +38,12 @@ export function LyricsView({ songId, position, duration }: Props) {
     )
   }
   if (lyrics === null) return <div className="lyrics lyrics-message" />
+  return <LyricsText lyrics={lyrics} position={position} duration={duration} />
+}
+
+/** Lyrics already at hand, following the position: line by line when synced. */
+export function LyricsText(props: { lyrics: Lyrics; position: number | null; duration: number | null }) {
+  const { lyrics, position, duration } = props
   if (lyrics.status === 'none' || lyrics.lines.length === 0) {
     return (
       <div className="lyrics lyrics-message">

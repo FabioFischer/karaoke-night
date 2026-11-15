@@ -1,7 +1,7 @@
 // Every string the screens show, in Brazilian Portuguese: the singers read it.
 // The rest of the repository stays in English (CLAUDE.md, Rules).
 
-import type { Entry, EntryState } from './api'
+import type { Entry, EntryState, SessionState } from './api'
 
 export const text = {
   loading: 'Carregando...',
@@ -74,6 +74,23 @@ export const text = {
     noNext: 'Não há mais músicas na fila.',
     backHome: 'Voltar ao início',
   },
+
+  // The public page on a phone (docs/PLAN.md section 5.9).
+  public: {
+    nowTab: 'Agora',
+    queueTab: 'Fila',
+    searchTab: 'Buscar',
+    offline: 'O karaokê está fora do ar. O que aparece aqui pode estar desatualizado.',
+    notLive: 'O karaokê não está no ar agora.',
+    library: 'Biblioteca',
+  },
+}
+
+/** What the current song is, by the state of the session. */
+export const sessionHeadings: Record<SessionState, string> = {
+  setup: text.home.current,
+  playing: text.home.nowPlaying,
+  results: text.home.ended,
 }
 
 export const stemNames: Record<string, string> = {
@@ -134,6 +151,25 @@ export const errorMessages: Record<string, string> = {
 
 export function errorMessage(code: string): string {
   return errorMessages[code] ?? 'Algo deu errado.'
+}
+
+/**
+ * What a phone says where it differs from the TV: the public reaches the
+ * Stage through the internet and cannot act on it. The other codes read as on
+ * the TV.
+ */
+const phoneErrorMessages: Record<string, string> = {
+  network: 'Sem conexão com o karaokê. Confira a internet do celular e tente de novo.',
+  http_error: 'O karaokê respondeu com um erro. Tente de novo.',
+  entry_playing: 'Essa música já começou e não pode mais sair da fila.',
+  store_unavailable: 'O karaokê está fora do ar agora.',
+  expired: 'O pedido demorou demais para chegar ao palco e não foi feito. Tente de novo.',
+  no_answer: 'Não foi possível concluir o pedido. Confira a fila antes de tentar de novo.',
+  search_no_answer: 'A busca demorou demais. Tente de novo.',
+}
+
+export function phoneErrorMessage(code: string): string {
+  return phoneErrorMessages[code] ?? errorMessage(code)
 }
 
 export function stemName(stem: string): string {

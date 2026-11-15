@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, toApiError, type ApiError, type SearchAnswer, type Song } from '../api'
+import { toApiError, type ApiError, type SearchAnswer, type Song } from '../api'
+import { useCalls } from '../calls'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
 import { SongItem } from './SongItem'
@@ -42,7 +43,8 @@ function TabButton(props: { active: boolean; onClick: () => void; children: stri
   )
 }
 
-function SearchView() {
+export function SearchView() {
+  const calls = useCalls()
   const [query, setQuery] = useState('')
   const [answer, setAnswer] = useState<SearchAnswer | null>(null)
   const [busy, setBusy] = useState(false)
@@ -54,7 +56,7 @@ function SearchView() {
     setBusy(true)
     setError(null)
     try {
-      setAnswer(await api.search(query))
+      setAnswer(await calls.search(query))
     } catch (caught) {
       setError(toApiError(caught))
     } finally {
@@ -88,13 +90,14 @@ function SearchView() {
   )
 }
 
-function LibraryView() {
+export function LibraryView() {
+  const calls = useCalls()
   const [songs, setSongs] = useState<Song[] | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    api
+    calls
       .library()
       .then((answer) => !cancelled && setSongs(answer.songs))
       .catch((caught) => !cancelled && setError(toApiError(caught)))

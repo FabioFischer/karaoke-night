@@ -1,17 +1,18 @@
 import { useState } from 'react'
-import { api, type Song } from '../api'
+import type { Song } from '../api'
+import { useAction, useCalls } from '../calls'
 import { formatTime } from '../session'
-import { useAction } from '../stage-state'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
 
 /** A search or library result with its add button. */
 export function SongItem({ song }: { song: Song }) {
+  const calls = useCalls()
   const add = useAction()
   const [added, setAdded] = useState(false)
 
   async function addToPlaylist() {
-    if (await add.run(() => api.add(song))) setAdded(true)
+    if (await add.run(() => calls.add(song))) setAdded(true)
   }
 
   const details = [song.artist, song.album, formatTime(song.duration_s)].filter(Boolean)

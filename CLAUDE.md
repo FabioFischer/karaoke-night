@@ -24,10 +24,12 @@ The layout is in `docs/PLAN.md` §5.5. Python commands run from the repository r
 |---|---|
 | Set up Python (uv workspace, Python 3.12) | `uv sync --all-packages` |
 | Test | `uv run pytest` |
+| Web test (Vitest, public functions and phone logic) | `npm test` |
 | Lint | `uv run ruff check` |
 | Format | `uv run ruff format` (CI runs `uv run ruff format --check`) |
 | Set up web | `npm ci` |
 | Web build (tsc, then Vite) | `npm run build` |
+| Public web build, for Vercel | `npm run build:public` |
 | Web dev server | `npm run dev` |
 
 ### Studio pipeline
@@ -98,7 +100,7 @@ It listens on `127.0.0.1` only, port 8791 by default, and serves the built web f
 
 With the public store's Upstash REST URL and token in `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN`, `stage serve` also feeds the public page (`docs/PLAN.md` §5.9, contract between the Stage and Vercel): on start it deletes the requests left in the store, then publishes the snapshot (on every change, checked every 0.5 s, and at least every 3 s) and the library (when it changes, checked every 3 s), and applies the public requests about once a second, its searches in a pool of 2 threads of their own; a request taken more than 15 s after its `at_ms` is answered `expired` and not applied. Nothing is published before the store's clock is known (Redis `TIME`, learned again every minute). Without both variables it says so on stderr and publishes nothing. A store that fails or does not answer within 5 s is logged once (`warning: the public store failed (...); trying again on every cycle`), and again only after `warning: the public store answers again`; playback and the local screens never wait on it. The tests reach no store: `FakeStore` in `packages/stage/tests/conftest.py` stands in for Upstash.
 
-The screens are `/karaoke` (home), `/karaoke/stage` (setup, then the song playing) and `/karaoke/stage/results`; `/` goes to `/karaoke`. To work on them, run `stage serve` on its default port and `npm run dev` in `web/`: the Vite dev server sends `/api` to `http://127.0.0.1:8791`. There is no front end test runner: the logic lives in the Stage API and its tests, and the screens are proven by `npm run build` and in a browser.
+The screens are `/karaoke` (home), `/karaoke/stage` (setup, then the song playing) and `/karaoke/stage/results`; `/` goes to `/karaoke`. To work on them, run `stage serve` on its default port and `npm run dev` in `web/`: the Vite dev server sends `/api` to `http://127.0.0.1:8791`. The TV screens have no tests of their own: their logic lives in the Stage API and its tests, and they are proven by `npm run build` and in a browser. `npm test` (Vitest, below) covers only the public page's functions and the phone's logic.
 
 ### Night scripts
 
@@ -116,4 +118,17 @@ scripts\studio-stop.ps1
 
 None of them has a test harness: they are proven by parsing and in a live run.
 
-CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci` and `npm run build`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.
+### Public page on Vercel
+
+The public page of an event (`docs/PLAN.md` §5.9) is a Vercel project whose root directory is `web/`; `web/vercel.json` sets its build and routes. `npm run build:public` (`vite build --mode public`) builds only the phone's page, `web/public.html` with `src/public/`, into `web/dist-public`: one route, `/karaoke`, with the tabs *Agora*, *Fila* and *Buscar*. The operator's screens are not in it. `npm run build` stays the Stage's own build, served by `stage serve`.
+
+The functions are the files of `web/api/public/` (Node runtime, Web standard handlers); `web/server/` holds what they share, outside `api/` so it is not a function, and `web/server/store.ts` is the only code that reads the store's credentials, `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN` (the Upstash REST URL and token, the same names the Stage uses). They are set by hand in the Vercel project's Production environment only, so a preview never touches an event, and never committed. `tsc -b` checks the functions with `tsconfig.api.json`; their relative imports name the `.js` file, as Node ESM needs.
+
+`npm test` runs Vitest on `web/test/`, in Node, with no DOM and no network:
+
+- the five functions of `web/api/public/`, called as Vercel calls them, against a fake Upstash (`web/test/fake-upstash.ts`, a stubbed `fetch`), never the real store;
+- the phone's logic without a screen: the requests and their answers (`src/public/public-api.ts`, with a stubbed `fetch` and fake timers: the polls, the give up after 15 s, the 5 s timeout of each call), the clock rules (`src/public/phone-clock.ts`: offset, position, offline) and the phone's error messages.
+
+Not tested: every screen, the TV's and the phone's alike (proven by both builds and in a browser), and the Vercel platform itself (`web/vercel.json`, the routing of `api/` and the edge cache), which only a deployment shows. Tests live outside `api/`, where every file would become a function. `tsc -b` checks them with `tsconfig.test.json`.
+
+CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci`, `npm test`, `npm run build` and `npm run build:public`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { api, toApiError, type ApiError, type StageState } from './api'
+import { api, type StageState } from './api'
+import { CallsContext } from './calls'
 
 const POLL_MS = 250
 
@@ -8,8 +9,6 @@ interface StageContextValue {
   state: StageState | null
   /** The last poll failed: the Stage server cannot be reached. */
   offline: boolean
-  /** Runs a call to the API, then shows the state it answered, or polls at once. */
-  perform: (call: () => Promise<unknown>) => Promise<void>
 }
 
 const StageContext = createContext<StageContextValue | null>(null)
@@ -58,6 +57,7 @@ export function StageStateProvider({ children }: { children: ReactNode }) {
     // Runs once: poll only touches refs and state setters, which never change.
   }, [])
 
+  /** Runs a call to the API, then shows the state it answered, or polls at once. */
   async function perform(call: () => Promise<unknown>) {
     const answer = await call()
     if (isStageState(answer)) {
@@ -68,8 +68,17 @@ export function StageStateProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const calls = {
+    search: api.search,
+    library: api.library,
+    add: api.add,
+    remove: api.remove,
+    perform,
+  }
   return (
-    <StageContext.Provider value={{ state, offline, perform }}>{children}</StageContext.Provider>
+    <StageContext.Provider value={{ state, offline }}>
+      <CallsContext.Provider value={calls}>{children}</CallsContext.Provider>
+    </StageContext.Provider>
   )
 }
 
@@ -79,25 +88,3 @@ export function useStage(): StageContextValue {
   return value
 }
 
-/** One button's call to the API: whether it runs, and its refusal if any. */
-export function useAction() {
-  const { perform } = useStage()
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<ApiError | null>(null)
-
-  async function run(call: () => Promise<unknown>): Promise<boolean> {
-    setBusy(true)
-    setError(null)
-    try {
-      await perform(call)
-      return true
-    } catch (caught) {
-      setError(toApiError(caught))
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return { run, busy, error }
-}

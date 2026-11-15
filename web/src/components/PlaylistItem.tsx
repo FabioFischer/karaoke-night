@@ -1,11 +1,12 @@
-import { api, type Entry } from '../api'
-import { useAction } from '../stage-state'
+import type { Entry } from '../api'
+import { useAction, useCalls } from '../calls'
 import { text } from '../text'
 import { EntryStatus } from './EntryStatus'
 import { ErrorNote } from './ErrorNote'
 
 /** One upcoming song: title, artist, its state and a remove button. */
 export function PlaylistItem({ entry }: { entry: Entry }) {
+  const calls = useCalls()
   const remove = useAction()
   return (
     <li className="playlist-item">
@@ -18,7 +19,7 @@ export function PlaylistItem({ entry }: { entry: Entry }) {
         type="button"
         className="button-quiet"
         disabled={remove.busy}
-        onClick={() => remove.run(() => api.remove(entry.id))}
+        onClick={() => remove.run(() => calls.remove(entry.id))}
       >
         {text.home.remove}
       </button>

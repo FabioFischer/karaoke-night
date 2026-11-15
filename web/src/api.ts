@@ -94,19 +94,30 @@ export function toApiError(error: unknown): ApiError {
   return new ApiError('network', error instanceof Error ? error.message : String(error))
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** One call to an API; `signal` lets a caller give up on it, which reads as `network`. */
+export async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   let response: Response
   try {
     response = await fetch(path, {
       method,
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     })
   } catch (error) {
     throw toApiError(error)
   }
   if (response.status === 204) return undefined as T
-  const payload = await response.json().catch(() => null)
+  const payload = await response.json().catch((error) => {
+    // A body cut by the caller giving up is a failed call, not an empty answer.
+    if (signal?.aborted) throw toApiError(error)
+    return null
+  })
   if (!response.ok) {
     if (payload && typeof payload.error === 'string') {
       throw new ApiError(payload.error, String(payload.detail ?? ''))

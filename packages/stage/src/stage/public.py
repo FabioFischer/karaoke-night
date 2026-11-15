@@ -21,7 +21,7 @@ from pydantic import ValidationError
 from stage import library as lib
 from stage.lyrics import song_lyrics
 from stage.playlist import NotAddable, Playlist
-from stage.search import Found, Result, library_results
+from stage.search import Found, Result, from_library
 from stage.server import AddRequest, entry_json
 from stage.session import Session, SessionError, SessionView
 from stage.store import Store, StoreError
@@ -80,6 +80,8 @@ class Publisher:
         self._songs: list[dict] | None = None
         self._library_checked_at: float | None = None
         self._lyrics: tuple[str, dict | None] | None = None
+        # The library is scanned on a timer: each invalid manifest is warned once.
+        self._warned: dict[str, bytes] = {}
         self._stopping = threading.Event()
 
     def cycle(self) -> None:
@@ -177,12 +179,13 @@ class Publisher:
         return self._lyrics[1]
 
     def _read_lyrics(self, song_id: str) -> dict | None:
-        song = lib.scan(self._library).get(song_id)
+        song = lib.scan(self._library, self._warned).get(song_id)
         if song is None:
             return None
         try:
             lyrics = song_lyrics(song)
-        except OSError as error:
+        # A file it cannot open, or one saved in another encoding than UTF-8.
+        except (OSError, UnicodeDecodeError) as error:
             log.warning("the lyrics of %s are not published: %s", song_id, error)
             return None
         return {
@@ -197,7 +200,10 @@ class Publisher:
         if checked is not None and now - checked < LIBRARY_CHECK_S:
             return
         self._library_checked_at = now
-        songs = [asdict(result) for result in library_results(self._library)]
+        songs = [
+            asdict(from_library(song_id, song))
+            for song_id, song in lib.scan(self._library, self._warned).items()
+        ]
         if songs == self._songs:
             return
         self._store.set_json(

@@ -312,6 +312,60 @@ def test_a_song_without_lyrics_publishes_status_none(stage) -> None:
     }
 
 
+def test_the_next_song_publishes_its_own_lyrics(stage) -> None:
+    stage.add(FIRST)
+    stage.add(SECOND)
+    stage.session.start()
+    stage.publisher.cycle()
+    stage.session.stop()
+
+    stage.session.play_next()
+    stage.publisher.cycle()
+
+    assert stage.snapshot()["lyrics"] == {
+        "song_id": SECOND,
+        "status": "none",
+        "lines": [],
+    }
+
+
+def test_lyrics_that_cannot_be_decoded_publish_as_null(stage, caplog) -> None:
+    (stage.library / FIRST / "lyrics.lrc").write_bytes(b"[00:01.00] Caf\xe9\r\n")
+    stage.add(FIRST)
+    stage.session.start()
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        stage.publisher.cycle()
+
+    snapshot = stage.snapshot()
+    assert snapshot["session"]["state"] == "playing"
+    assert snapshot["lyrics"] is None
+    assert caplog.messages == [
+        (
+            f"the lyrics of {FIRST} are not published: 'utf-8' codec can't decode "
+            "byte 0xe9 in position 14: invalid continuation byte"
+        )
+    ]
+
+
+def test_an_invalid_manifest_is_warned_once_however_often_it_is_scanned(
+    stage, caplog
+) -> None:
+    broken = stage.library / "broken-song--artist-name--0a0b0c"
+    broken.mkdir()
+    (broken / "manifest.json").write_text("{", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        for _ in range(4):
+            stage.publisher.cycle()
+            stage.tick(3.0)
+
+    assert library_sets(stage) == 1
+    assert [message.split(":")[0] for message in caplog.messages] == [
+        "broken-song--artist-name--0a0b0c is not listed"
+    ]
+
+
 def test_the_library_is_published_at_start(stage) -> None:
     stage.publisher.cycle()
 

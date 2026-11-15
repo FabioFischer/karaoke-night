@@ -47,8 +47,14 @@ def partial_folder(library: Path, song_id: str) -> Path:
     return library / f".{song_id}.partial"
 
 
-def scan(library: Path) -> dict[str, Song]:
-    """Every package in library, by folder name, with manifest.json as stored."""
+def scan(library: Path, warned: dict[str, bytes] | None = None) -> dict[str, Song]:
+    """Every package in library, by folder name, with manifest.json as stored.
+
+    An invalid manifest is warned about on every scan, unless warned is given:
+    it then holds the invalid manifests already warned about, by folder, and
+    each is warned about again only once its bytes change. For a caller that
+    scans on a timer.
+    """
     if not library.is_dir():
         return {}
     songs = {}
@@ -64,11 +70,14 @@ def scan(library: Path) -> dict[str, Song]:
         try:
             manifest = Manifest.model_validate_json(raw)
         except ValidationError as error:
-            log.warning(
-                "%s is not listed: invalid manifest.json (%s)",
-                folder.name,
-                describe(error),
-            )
+            if warned is None or warned.get(folder.name) != raw:
+                log.warning(
+                    "%s is not listed: invalid manifest.json (%s)",
+                    folder.name,
+                    describe(error),
+                )
+            if warned is not None:
+                warned[folder.name] = raw
             continue
         songs[folder.name] = Song(folder, raw, manifest)
     return songs

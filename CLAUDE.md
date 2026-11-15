@@ -24,6 +24,7 @@ The layout is in `docs/PLAN.md` §5.5. Python commands run from the repository r
 |---|---|
 | Set up Python (uv workspace, Python 3.12) | `uv sync --all-packages` |
 | Test | `uv run pytest` |
+| Web test (Vitest, public functions and phone logic) | `npm test` |
 | Lint | `uv run ruff check` |
 | Format | `uv run ruff format` (CI runs `uv run ruff format --check`) |
 | Set up web | `npm ci` |
@@ -97,7 +98,7 @@ uv run stage serve --studio http://<studio address>:8790 [--library DIR] [--port
 
 It listens on `127.0.0.1` only, port 8791 by default, and serves the built web from `--web` (default `web/dist` in the current folder), or only the API when that folder holds no `index.html`, which it says on stderr. Without `--studio` or `STUDIO_TOKEN` it still serves and says so: songs of the library play, and a new song added to the playlist fails with the reason. The playlist lives in memory and is lost when the server stops. The playlist worker downloads new songs into the library, so never run `stage serve` and `stage sync` on the same library at once (nothing enforces it). `uv run stage serve --help` lists the options.
 
-The screens are `/karaoke` (home), `/karaoke/stage` (setup, then the song playing) and `/karaoke/stage/results`; `/` goes to `/karaoke`. To work on them, run `stage serve` on its default port and `npm run dev` in `web/`: the Vite dev server sends `/api` to `http://127.0.0.1:8791`. There is no front end test runner: the logic lives in the Stage API and its tests, and the screens are proven by `npm run build` and in a browser.
+The screens are `/karaoke` (home), `/karaoke/stage` (setup, then the song playing) and `/karaoke/stage/results`; `/` goes to `/karaoke`. To work on them, run `stage serve` on its default port and `npm run dev` in `web/`: the Vite dev server sends `/api` to `http://127.0.0.1:8791`. The TV screens have no tests of their own: their logic lives in the Stage API and its tests, and they are proven by `npm run build` and in a browser. `npm test` (Vitest, below) covers only the public page's functions and the phone's logic.
 
 ### Night scripts
 
@@ -121,6 +122,11 @@ The public page of an event (`docs/PLAN.md` §5.9) is a Vercel project whose roo
 
 The functions are the files of `web/api/public/` (Node runtime, Web standard handlers); `web/server/` holds what they share, outside `api/` so it is not a function, and `web/server/store.ts` is the only code that reads the store's credentials, `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN` (the Upstash REST URL and token, the same names the Stage uses). They are set by hand in the Vercel project's Production environment only, so a preview never touches an event, and never committed. `tsc -b` checks the functions with `tsconfig.api.json`; their relative imports name the `.js` file, as Node ESM needs.
 
-There is no local Vercel run: the functions are proven by `npm run build` and by calling them in a scratch script against a fake store, never against the real one.
+`npm test` runs Vitest on `web/test/`, in Node, with no DOM and no network:
 
-CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci`, `npm run build` and `npm run build:public`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.
+- the five functions of `web/api/public/`, called as Vercel calls them, against a fake Upstash (`web/test/fake-upstash.ts`, a stubbed `fetch`), never the real store;
+- the phone's logic without a screen: the requests and their answers (`src/public/public-api.ts`, with a stubbed `fetch` and fake timers: the polls, the give up after 15 s, the 5 s timeout of each call), the clock rules (`src/public/phone-clock.ts`: offset, position, offline) and the phone's error messages.
+
+Not tested: every screen, the TV's and the phone's alike (proven by both builds and in a browser), and the Vercel platform itself (`web/vercel.json`, the routing of `api/` and the edge cache), which only a deployment shows. Tests live outside `api/`, where every file would become a function. `tsc -b` checks them with `tsconfig.test.json`.
+
+CI (`.github/workflows/ci.yml`) runs `uv sync --all-packages --locked`, the lint, format check and tests, then `npm ci`, `npm test`, `npm run build` and `npm run build:public`. After changing dependencies, commit the updated `uv.lock` or `web/package-lock.json`.

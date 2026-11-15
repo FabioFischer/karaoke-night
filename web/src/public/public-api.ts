@@ -12,6 +12,11 @@ import {
 
 const ANSWER_POLL_MS = 1000
 const ANSWER_TIMEOUT_MS = 15_000
+// A call that hangs must not freeze a poll: past this it fails as `network`.
+const CALL_TIMEOUT_MS = 5000
+// Codes after which the request is still in the store and may be answered:
+// keep polling until ANSWER_TIMEOUT_MS.
+const KEEP_POLLING = ['pending', 'network', 'store_unavailable']
 
 /** The song's position at one instant, in the store's clock. */
 export interface Anchor {
@@ -50,20 +55,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/** A signal that gives up on a call after `ms`. */
+function timeout(ms: number): AbortSignal {
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(new DOMException('no answer in time', 'TimeoutError')), ms)
+  return controller.signal
+}
+
 /**
  * Leaves a request for the Stage and waits for its answer, polling every
  * second. The request may still be applied after the phone gives up.
  */
 async function ask(body: PublicRequest): Promise<Answer> {
-  const { id } = await request<{ id: string }>('POST', '/api/public/requests', body)
+  const { id } = await request<{ id: string }>(
+    'POST',
+    '/api/public/requests',
+    body,
+    timeout(CALL_TIMEOUT_MS),
+  )
   const deadline = Date.now() + ANSWER_TIMEOUT_MS
   while (Date.now() < deadline) {
     await sleep(ANSWER_POLL_MS)
+    const left = Math.min(CALL_TIMEOUT_MS, deadline - Date.now())
     try {
-      return await request<Answer>('GET', `/api/public/requests/${encodeURIComponent(id)}`)
+      return await request<Answer>(
+        'GET',
+        `/api/public/requests/${encodeURIComponent(id)}`,
+        undefined,
+        timeout(left),
+      )
     } catch (error) {
-      // No answer yet, or a poll lost on the way: the request is in the store, so keep asking.
-      if (error instanceof ApiError && (error.code === 'pending' || error.code === 'network')) continue
+      if (error instanceof ApiError && KEEP_POLLING.includes(error.code)) continue
       throw error
     }
   }
@@ -79,15 +101,30 @@ async function askOk(body: PublicRequest): Promise<Answer & { ok: true }> {
 export const publicApi = {
   /** The snapshot, or null before the Stage published one. */
   state: async (): Promise<Snapshot | null> => {
-    const answer = await request<StateAnswer>('GET', '/api/public/state')
+    const answer = await request<StateAnswer>(
+      'GET',
+      '/api/public/state',
+      undefined,
+      timeout(CALL_TIMEOUT_MS),
+    )
     return 'published_at_ms' in answer ? answer : null
   },
-  library: () => request<{ songs: Song[] }>('GET', '/api/public/library'),
-  time: () => request<{ now_ms: number }>('GET', '/api/public/time'),
+  library: () =>
+    request<{ songs: Song[] }>('GET', '/api/public/library', undefined, timeout(CALL_TIMEOUT_MS)),
+  time: () =>
+    request<{ now_ms: number }>('GET', '/api/public/time', undefined, timeout(CALL_TIMEOUT_MS)),
   add: (song: Song) => askOk({ op: 'add', song }),
   remove: (entryId: string) => askOk({ op: 'remove', entry_id: entryId }),
+  /** A search that got no answer, or one too old for the Stage, is just a search to try again. */
   search: async (query: string): Promise<SearchAnswer> => {
-    const answer = await askOk({ op: 'search', q: query })
-    return { results: answer.results ?? [], notice: answer.notice ?? null, detail: null }
+    try {
+      const answer = await askOk({ op: 'search', q: query })
+      return { results: answer.results ?? [], notice: answer.notice ?? null, detail: null }
+    } catch (error) {
+      if (error instanceof ApiError && (error.code === 'no_answer' || error.code === 'expired')) {
+        throw new ApiError('search_no_answer', error.detail)
+      }
+      throw error
+    }
   },
 }

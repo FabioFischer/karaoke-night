@@ -6,6 +6,8 @@ Windows does not run `.ps1` files by default, so each script runs as `powershell
 
 The Studio token is kept in a file on each machine, the same token on both: outside the clone, or in a `*.local.*` file in its root, which git ignores. No script prints it or puts it on a command line.
 
+The public page (`docs/PLAN.md` §5.9) needs the public store's Upstash REST URL and token on the Stage, in a store file kept the same way: the URL on its first line, the token on its second. Without it, the night runs with the Stage's own screens only.
+
 ## Before, at home
 
 On the **Studio**, in an administrator PowerShell or over SSH:
@@ -36,7 +38,8 @@ On the **Stage**, in a PowerShell in the clone:
    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$clone\scripts\stage-night.ps1`"" +
        " -Project `"C:\path\to\karaoke-session.RPP`"" +
        " -Studio http://<studio address>:8790" +
-       " -TokenFile `"C:\path\to\studio-token.txt`""
+       " -TokenFile `"C:\path\to\studio-token.txt`"" +
+       " -StoreFile `"C:\path\to\store.txt`""
    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut(
        (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Karaoke night.lnk'))
    $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -45,7 +48,7 @@ On the **Stage**, in a PowerShell in the clone:
    $shortcut.Save()
    ```
 
-   Without `-Studio` and `-TokenFile`, the night still runs, with the songs of the library only.
+   Without `-Studio` and `-TokenFile`, the night still runs, with the songs of the library only. Without `-StoreFile`, it runs without the public page: the `stage serve` window then says `stage serve: no public store (...)`.
 
 ## At the venue
 
@@ -61,6 +64,7 @@ On the **Stage**, in a PowerShell in the clone:
 - A new song needs the Studio up and reachable: `studio serve` running and Tailscale connected on both machines. Songs in the library play without either.
 - The playlist lives in `stage serve`'s memory: closing its window stops the server and empties the playlist.
 - If the screen says the karaoke script in REAPER did not answer, restart REAPER (`reaper/README.md`, How the bridge works).
+- The public page follows the Stage only while `stage serve` runs and the venue has internet. When the store does not answer, the `stage serve` window shows `warning: the public store failed (...)` once, and `warning: the public store answers again` when it is back; playback and the TV are not affected. Requests left on the public page while `stage serve` was closed are discarded when it starts again.
 
 ## After
 

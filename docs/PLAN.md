@@ -8,11 +8,11 @@
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
 - **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only during an event, and the public page lives on Vercel, fed by a snapshot the Stage publishes.
-- **In progress:** milestone A9 (first night): the night scripts (`scripts/`) and the runbook (`docs/NIGHT.md`) are done and checked live (results in §6 Phase 1); the full test session at the venue is left.
+- **In progress:** milestone A9 (first night): the night scripts (`scripts/`) and the runbook (`docs/NIGHT.md`) are done and checked live (results in §6 Phase 1); the full test session at the venue is left. Milestone A10 (public access, §5.9): the Stage side (A10a: publishing the snapshot, applying the public's requests) is done; the Vercel side (A10b) and the live check from a phone are left.
 - **Next:**
   - the A8 criterion with someone who has never used the app, at the first night (A9);
   - measure a package download on the venue's own network during the first night (A9, `docs/NIGHT.md`);
-  - milestone A10 (public access, §5.9);
+  - finish milestone A10: the Vercel side, then a live check from a phone outside the venue's network;
   - after an interface upgrade, which the beta's second mic needs anyway: S1 round 2, and the pitch correction test plugged in at a 128 sample buffer (A6 results), which finishes the effects chain guide in `reaper/README.md`. The test waits for the new interface because the latency and the buffer may change with it.
 
 ## 1. Goal

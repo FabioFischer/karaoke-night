@@ -791,3 +791,16 @@ def test_a_request_15_s_old_is_still_applied(reader, stage) -> None:
 
 def test_the_store_clock_runs_on_the_finest_clock(store) -> None:
     assert StoreClock(store.client()).local is time.perf_counter
+
+
+def test_a_request_nested_too_deep_to_read_is_dropped(reader, stage, caplog) -> None:
+    deep = "[" * 3_000 + "]" * 3_000
+    reader.send(deep, {"id": "r2", "op": "add", "song": library_result(FIRST)})
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        reader.run()
+
+    assert caplog.messages[0] == (
+        f"dropped a public request without an id: {deep[:200]}"
+    )
+    assert reader.answer("r2")["ok"] is True

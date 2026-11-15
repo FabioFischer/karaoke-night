@@ -252,8 +252,9 @@ class RequestReader:
     before, and only the cycles after it read. Each request is taken from the
     head of the list and answered under its id; a search is handed to a pool
     of its own, so the requests behind it, and the publisher, never wait on
-    YouTube. A request's at_ms is the store's clock when it was stored, so
-    its age is measured in the store's clock too.
+    YouTube. A request's at_ms is the Vercel function's clock (Date.now())
+    when it stored it, and its age is measured against the store's clock,
+    taking both clocks as close enough for REQUEST_EXPIRY_MS.
     """
 
     def __init__(
@@ -312,7 +313,8 @@ class RequestReader:
     def _take(self, raw: str) -> None:
         try:
             request = json.loads(raw)
-        except ValueError:
+        # A request nested deeper than Python's recursion limit raises the latter.
+        except (ValueError, RecursionError):
             request = None
         request_id = request.get("id") if isinstance(request, dict) else None
         if not isinstance(request_id, str) or not request_id:

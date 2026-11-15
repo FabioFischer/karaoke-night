@@ -41,7 +41,7 @@ class SessionView:
 
     entry_id is the song of the session: the first entry in setup, the one
     played in playing and results. position_at_s is when REAPER reported
-    position_s, in the session's clock (time.monotonic). error and detail are
+    position_s, in the session's clock (time.perf_counter). error and detail are
     the last failure, cleared by the next action or poll that works.
     """
 
@@ -75,7 +75,7 @@ class Session:
         *,
         poll_s: float = POLL_S,
         follow: bool = True,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self._playlist = playlist
         self._library = library

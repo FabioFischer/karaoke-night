@@ -42,39 +42,85 @@ REFRESH_S = 3.0
 # The library is scanned this often and published when it changed.
 LIBRARY_CHECK_S = 3.0
 CLOCK_REFRESH_S = 60.0
+# The first TIME also pays for DNS, TCP and TLS: the faster of these many counts.
+FIRST_CLOCK_SAMPLES = 2
 READ_TICK_S = 1.0
+# A request taken later than this after the public function stored it is
+# answered expired and not applied: the phone gave up on it after 15 s.
+REQUEST_EXPIRY_MS = 15_000
 # Searches run here, off the reader, so an add or a remove never waits on one.
 SEARCH_WORKERS = 2
 # How much of a request that cannot be read goes into the log.
 LOGGED_CHARS = 200
 
 INVALID = {"ok": False, "error": "invalid_request"}
+EXPIRED = {"ok": False, "error": "expired"}
+
+
+class StoreClock:
+    """The store's clock, from Redis TIME, shared by the publisher and the reader.
+
+    local is the Stage's clock, the session's too (time.perf_counter: on
+    Windows time.monotonic ticks every 15.6 ms). learn() raises StoreError
+    while the store does not answer, and the times need it to have worked once.
+    """
+
+    def __init__(
+        self, store: Store, local: Callable[[], float] = time.perf_counter
+    ) -> None:
+        self._store = store
+        self.local = local
+        self._offset_ms: float | None = None
+        self._learned_at = 0.0
+        self._lock = threading.Lock()
+
+    def learn(self) -> None:
+        """Learn the offset, unless it was learned within CLOCK_REFRESH_S."""
+        with self._lock:
+            known = self._offset_ms is not None
+            if known and self.local() - self._learned_at < CLOCK_REFRESH_S:
+                return
+            fastest: tuple[float, float] | None = None
+            for _ in range(1 if known else FIRST_CLOCK_SAMPLES):
+                asked = self.local()
+                store_ms = self._store.time_ms()
+                answered = self.local()
+                # The store read its clock about halfway through the round trip.
+                offset_ms = store_ms - (asked + answered) / 2 * 1000
+                if fastest is None or answered - asked < fastest[0]:
+                    fastest = (answered - asked, offset_ms)
+            self._offset_ms = fastest[1]
+            self._learned_at = self.local()
+
+    def store_ms(self, local_s: float) -> int:
+        """local_s, a time of the local clock, in the store's clock."""
+        return round(local_s * 1000 + self._offset_ms)
+
+    def now_ms(self) -> int:
+        return self.store_ms(self.local())
 
 
 class Publisher:
     """Publishes the snapshot and the library; call cycle() or start().
 
-    Times are in the store's clock: the offset from clock (time.monotonic, as
-    the session's) is learned from Redis TIME, and nothing is published
-    before it is known.
+    Times are in the store's clock, and nothing is published before it is
+    known. The session must run on the clock's local clock.
     """
 
     def __init__(
         self,
         store: Store,
+        clock: StoreClock,
         library: Path,
         playlist: Playlist,
         session: Session,
-        *,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._store = store
+        self._store_clock = clock
+        self._clock = clock.local
         self._library = library
         self._playlist = playlist
         self._session = session
-        self._clock = clock
-        self._offset_ms: float | None = None
-        self._offset_at = 0.0
         self._published: dict | None = None
         self._published_at = 0.0
         self._songs: list[dict] | None = None
@@ -86,7 +132,7 @@ class Publisher:
 
     def cycle(self) -> None:
         try:
-            self._learn_clock()
+            self._store_clock.learn()
             self._publish_snapshot()
             self._publish_library()
         except StoreError:
@@ -109,21 +155,8 @@ class Publisher:
             if self._stopping.wait(PUBLISH_TICK_S):
                 return
 
-    def _learn_clock(self) -> None:
-        if (
-            self._offset_ms is not None
-            and self._clock() - self._offset_at < CLOCK_REFRESH_S
-        ):
-            return
-        asked = self._clock()
-        store_ms = self._store.time_ms()
-        answered = self._clock()
-        # The store read its clock about halfway through the round trip.
-        self._offset_ms = store_ms - (asked + answered) / 2 * 1000
-        self._offset_at = answered
-
     def _store_ms(self, local_s: float) -> int:
-        return round(local_s * 1000 + self._offset_ms)
+        return self._store_clock.store_ms(local_s)
 
     def _publish_snapshot(self) -> None:
         view = self._session.view()
@@ -219,17 +252,20 @@ class RequestReader:
     before, and only the cycles after it read. Each request is taken from the
     head of the list and answered under its id; a search is handed to a pool
     of its own, so the requests behind it, and the publisher, never wait on
-    YouTube.
+    YouTube. A request's at_ms is the store's clock when it was stored, so
+    its age is measured in the store's clock too.
     """
 
     def __init__(
         self,
         store: Store,
+        clock: StoreClock,
         playlist: Playlist,
         session: Session,
         find: Callable[[str], Found],
     ) -> None:
         self._store = store
+        self._clock = clock
         self._playlist = playlist
         self._session = session
         self._find = find
@@ -245,6 +281,7 @@ class RequestReader:
                 self._store.delete(REQUESTS_KEY)
                 self._cleared = True
                 return
+            self._clock.learn()
             while (raw := self._store.pop(REQUESTS_KEY)) is not None:
                 self._take(raw)
         except StoreError:
@@ -282,6 +319,22 @@ class RequestReader:
             log.warning(
                 "dropped a public request without an id: %s", raw[:LOGGED_CHARS]
             )
+            return
+        at_ms = request.get("at_ms")
+        if not isinstance(at_ms, int | float) or isinstance(at_ms, bool):
+            log.warning(
+                "public request %s is invalid: %s", request_id, raw[:LOGGED_CHARS]
+            )
+            self._answer(request_id, INVALID)
+            return
+        age_ms = self._clock.now_ms() - at_ms
+        if age_ms > REQUEST_EXPIRY_MS:
+            log.warning(
+                "public request %s expired: taken %d ms after it was sent",
+                request_id,
+                age_ms,
+            )
+            self._answer(request_id, EXPIRED)
             return
         if request.get("op") == "search" and isinstance(request.get("q"), str):
             try:

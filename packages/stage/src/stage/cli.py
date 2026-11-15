@@ -15,7 +15,7 @@ from stage import search
 from stage.client import StudioClient, StudioError
 from stage.player import Player, ReaperError, ReaperPlayer
 from stage.playlist import Playlist
-from stage.public import Publisher, RequestReader
+from stage.public import Publisher, RequestReader, StoreClock
 from stage.server import create_app
 from stage.session import Session
 from stage.store import Store
@@ -357,9 +357,11 @@ def serve(args: argparse.Namespace, http: httpx2.Client | None) -> int:
     session = Session(playlist, args.library, player)
     public = []
     if store is not None:
+        # The session times its positions on the store clock's local clock.
+        clock = StoreClock(store)
         public = [
-            Publisher(store, args.library, playlist, session),
-            RequestReader(store, playlist, session, find),
+            Publisher(store, clock, args.library, playlist, session),
+            RequestReader(store, clock, playlist, session, find),
         ]
     playlist.start()
     for worker in public:

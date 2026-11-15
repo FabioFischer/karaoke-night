@@ -1,11 +1,12 @@
 import json
 import logging
 import threading
+import time
 
 import pytest
 from stage.player import ReaperUnreachable
 from stage.playlist import Playlist
-from stage.public import Publisher, RequestReader
+from stage.public import Publisher, RequestReader, StoreClock
 from stage.search import OFFLINE_NOTICE, Found, Result
 from stage.session import Session
 
@@ -20,7 +21,7 @@ OFFSET_MS = STORE_START_MS - START * 1000
 
 
 class Clock:
-    """The Stage's monotonic clock, moved by hand."""
+    """The Stage's clock, moved by hand."""
 
     def __init__(self) -> None:
         self.now = START
@@ -45,12 +46,9 @@ class Stage:
         self.session = Session(
             self.playlist, packages.path, player, follow=False, clock=self.clock
         )
+        self.store_clock = StoreClock(store.client(), self.clock)
         self.publisher = Publisher(
-            store.client(),
-            packages.path,
-            self.playlist,
-            self.session,
-            clock=self.clock,
+            store.client(), self.store_clock, packages.path, self.playlist, self.session
         )
 
     def add(self, song_id: str):
@@ -87,7 +85,7 @@ def song_json(song_id: str, title: str, duration_s: float) -> dict:
 def test_the_first_cycle_learns_the_store_clock_then_publishes(stage) -> None:
     stage.publisher.cycle()
 
-    assert stage.store.names() == ["TIME", "SET", "SET"]
+    assert stage.store.names() == ["TIME", "TIME", "SET", "SET"]
     assert stage.snapshot() == {
         "version": 1,
         "published_at_ms": STORE_START_MS,
@@ -165,18 +163,38 @@ def test_the_anchor_of_a_start_is_position_zero_when_play_returned(stage) -> Non
     }
 
 
-def test_the_clock_offset_takes_half_the_round_trip(stage) -> None:
+def round_trips(stage, *seconds: float) -> None:
+    """Each TIME takes the next of seconds by the Stage's clock; the store's
+    clock stands still meanwhile."""
+    trips = iter(seconds)
+
     def slow_time(command: list) -> None:
         if command == ["TIME"]:
-            stage.clock.now += 0.4
+            stage.clock.now += next(trips)
 
     stage.store.on_command = slow_time
 
+
+def test_the_first_offset_takes_half_of_the_faster_of_two_round_trips(
+    stage,
+) -> None:
+    round_trips(stage, 1.0, 0.4)
+
     stage.publisher.cycle()
 
-    # TIME was asked at 100.0 and answered at 100.4: the store read its clock
-    # at 100.2 by the Stage's clock, and the snapshot was published at 100.4.
+    # The second TIME was asked at 101.0 and answered at 101.4: the store read
+    # its clock at 101.2 by the Stage's, and the snapshot went out at 101.4.
     assert stage.snapshot()["published_at_ms"] == STORE_START_MS + 200
+
+
+def test_the_first_round_trip_counts_when_it_is_the_faster(stage) -> None:
+    round_trips(stage, 0.4, 1.0)
+
+    stage.publisher.cycle()
+
+    # The first TIME, asked at 100.0 and answered at 100.4, read at 100.2; the
+    # snapshot went out at 101.4.
+    assert stage.snapshot()["published_at_ms"] == STORE_START_MS + 1_200
 
 
 def test_the_clock_is_learned_again_every_minute(stage) -> None:
@@ -184,8 +202,8 @@ def test_the_clock_is_learned_again_every_minute(stage) -> None:
         stage.publisher.cycle()
         stage.tick(20.0)
 
-    # At 0, 20, 40, 60 and 80 s: learned at 0 and at 60.
-    assert stage.store.names().count("TIME") == 2
+    # At 0, 20, 40, 60 and 80 s: learned at 0 from two samples, at 60 from one.
+    assert stage.store.names().count("TIME") == 3
 
 
 def test_a_new_store_clock_moves_the_times_published(stage) -> None:
@@ -438,7 +456,11 @@ class Reader:
         self.release = threading.Event()
         self.release.set()
         self.reader = RequestReader(
-            stage.store.client(), stage.playlist, stage.session, self.find
+            stage.store.client(),
+            stage.store_clock,
+            stage.playlist,
+            stage.session,
+            self.find,
         )
         # The first cycle only clears the requests left from before.
         self.reader.cycle()
@@ -449,8 +471,12 @@ class Reader:
         return self.found
 
     def send(self, *requests) -> None:
+        """A request given as a dict gets at_ms, the store's now, unless it has
+        one; a string is sent as it is."""
         self.store.lists.setdefault("karaoke:requests", []).extend(
-            request if isinstance(request, str) else json.dumps(request)
+            request
+            if isinstance(request, str)
+            else json.dumps({"at_ms": self.store.now_ms, **request})
             for request in requests
         )
 
@@ -476,7 +502,9 @@ def test_the_first_cycle_deletes_the_requests_left_from_before(stage) -> None:
     stage.store.lists["karaoke:requests"] = [
         json.dumps({"id": "old", "op": "add", "song": library_result(FIRST)})
     ]
-    reader = RequestReader(stage.store.client(), stage.playlist, stage.session, None)
+    reader = RequestReader(
+        stage.store.client(), stage.store_clock, stage.playlist, stage.session, None
+    )
 
     reader.cycle()
     reader.cycle()
@@ -488,7 +516,9 @@ def test_the_first_cycle_deletes_the_requests_left_from_before(stage) -> None:
 
 def test_no_request_is_read_until_the_old_ones_are_deleted(stage) -> None:
     stage.store.down = True
-    reader = RequestReader(stage.store.client(), stage.playlist, stage.session, None)
+    reader = RequestReader(
+        stage.store.client(), stage.store_clock, stage.playlist, stage.session, None
+    )
     reader.cycle()
     stage.store.down = False
     stage.store.lists["karaoke:requests"] = ["left from before"]
@@ -619,6 +649,9 @@ def test_a_slow_search_does_not_hold_the_requests_behind_it(reader, stage) -> No
         {"id": "r1", "op": "remove", "entry_id": 7},
         {"id": "r1", "op": "search"},
         {"id": "r1", "op": "search", "q": ["words"]},
+        {"id": "r1", "op": "search", "q": "words", "at_ms": None},
+        {"id": "r1", "op": "search", "q": "words", "at_ms": "1700000000000"},
+        {"id": "r1", "op": "search", "q": "words", "at_ms": True},
     ],
 )
 def test_an_unreadable_request_with_an_id_is_invalid(reader, stage, request_) -> None:
@@ -686,7 +719,11 @@ def test_a_search_that_breaks_is_logged_and_answers_nothing(reader, caplog) -> N
         raise RuntimeError("broken search")
 
     reader.reader = RequestReader(
-        reader.store.client(), reader.stage.playlist, reader.stage.session, broken
+        reader.store.client(),
+        reader.stage.store_clock,
+        reader.stage.playlist,
+        reader.stage.session,
+        broken,
     )
     reader.reader.cycle()
     reader.send({"id": "r1", "op": "search", "q": "words"})
@@ -708,3 +745,49 @@ def test_the_reader_thread_reads_and_stops(reader, stage) -> None:
     reader.reader.start()
     assert answered.wait(5)
     reader.reader.stop()
+
+
+def test_a_request_without_at_ms_is_invalid(reader, stage) -> None:
+    song = library_result(FIRST)
+    reader.send(json.dumps({"id": "r1", "op": "add", "song": song}))
+
+    reader.run()
+
+    assert reader.answer("r1") == {"ok": False, "error": "invalid_request"}
+    assert stage.playlist.entries() == []
+
+
+def test_a_request_older_than_15_s_expires_unapplied(reader, stage, caplog) -> None:
+    at_ms = stage.store.now_ms - 15_001
+    reader.send(
+        {"id": "r1", "op": "add", "song": library_result(FIRST), "at_ms": at_ms},
+        {"id": "r2", "op": "search", "q": "words", "at_ms": at_ms},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        reader.run()
+
+    assert reader.answer("r1") == {"ok": False, "error": "expired"}
+    assert reader.answer("r2") == {"ok": False, "error": "expired"}
+    assert stage.store.expiry["karaoke:answer:r1"] == 120
+    assert stage.playlist.entries() == []
+    assert reader.queries == []
+    assert caplog.messages == [
+        "public request r1 expired: taken 15001 ms after it was sent",
+        "public request r2 expired: taken 15001 ms after it was sent",
+    ]
+
+
+def test_a_request_15_s_old_is_still_applied(reader, stage) -> None:
+    at_ms = stage.store.now_ms - 15_000
+    reader.send(
+        {"id": "r1", "op": "add", "song": library_result(FIRST), "at_ms": at_ms}
+    )
+
+    reader.run()
+
+    assert reader.answer("r1")["ok"] is True
+
+
+def test_the_store_clock_runs_on_the_finest_clock(store) -> None:
+    assert StoreClock(store.client()).local is time.perf_counter

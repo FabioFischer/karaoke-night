@@ -1,3 +1,4 @@
+import inspect
 import shutil
 import threading
 import time
@@ -498,3 +499,10 @@ def test_no_position_time_outside_a_song(session, playlist) -> None:
     session.setup_next()
 
     assert session.view().position_at_s is None
+
+
+def test_positions_are_timed_with_the_finest_clock() -> None:
+    # On Windows time.monotonic ticks every 15.6 ms.
+    default = inspect.signature(Session).parameters["clock"].default
+
+    assert default is time.perf_counter

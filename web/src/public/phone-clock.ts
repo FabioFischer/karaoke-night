@@ -18,17 +18,18 @@ export function anchoredPosition(session: PublicSession, storeNowMs: number): nu
 }
 
 /**
- * The position the phone shows. While playing, the anchor is null only when
- * the song is paused, and a paused snapshot carries no position: the phone
- * holds the last one it showed, which can be up to a poll past where the
- * song paused, until the new anchor of the resume corrects it.
+ * The position the phone shows. While paused, the anchor holds where REAPER
+ * paused, and the phone shows it without moving it on. A snapshot playing
+ * without an anchor has no position: the phone holds the last one it showed.
  */
 export function shownPosition(
   session: PublicSession,
   storeNowMs: number,
   lastShown: number | null,
 ): number | null {
-  if (session.state === 'playing' && session.anchor === null) return lastShown
+  if (session.state !== 'playing') return null
+  if (session.anchor === null) return lastShown
+  if (session.paused) return anchoredPosition(session, session.anchor.at_ms)
   return anchoredPosition(session, storeNowMs)
 }
 

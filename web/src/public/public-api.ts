@@ -30,7 +30,7 @@ export interface PublicSession {
   entry_id: string | null
   duration_s: number | null
   paused: boolean
-  /** Null outside playing and while paused. */
+  /** Null outside playing; while paused, where the song paused. */
   anchor: Anchor | null
 }
 

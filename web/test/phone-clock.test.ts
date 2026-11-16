@@ -46,19 +46,30 @@ describe('the position the phone shows', () => {
     paused: false,
     anchor: { position_s: 30, at_ms: 1_000_000 },
   }
-  const paused = { ...playing, paused: true, anchor: null }
+  const paused = { ...playing, paused: true, anchor: { position_s: 27.3, at_ms: 1_000_000 } }
+  const pausedWithoutAnchor = { ...paused, anchor: null }
 
   it('follows the anchor while the song plays', () => {
     expect(shownPosition(playing, 1_002_500, 12)).toBe(32.5)
   })
 
-  it('holds the last position shown while paused, however the clock moves', () => {
-    expect(shownPosition(paused, 1_002_500, 31.2)).toBe(31.2)
-    expect(shownPosition(paused, 1_900_000, 31.2)).toBe(31.2)
+  it('shows where the song paused and never moves it on, whatever was shown before', () => {
+    expect(shownPosition(paused, 1_000_000, 29.5)).toBe(27.3)
+    expect(shownPosition(paused, 1_900_000, 29.5)).toBe(27.3)
   })
 
-  it('has no position to hold when the phone saw none before the pause', () => {
-    expect(shownPosition(paused, 1_002_500, null)).toBeNull()
+  it('shows where the song paused to a phone that opened the page while paused', () => {
+    expect(shownPosition(paused, 1_002_500, null)).toBe(27.3)
+  })
+
+  it('never shows a paused position past the duration', () => {
+    expect(shownPosition({ ...paused, anchor: { position_s: 120, at_ms: 1_000_000 } }, 1_000_000, null)).toBe(95)
+  })
+
+  it('holds the last position shown for a paused snapshot without an anchor', () => {
+    expect(shownPosition(pausedWithoutAnchor, 1_002_500, 31.2)).toBe(31.2)
+    expect(shownPosition(pausedWithoutAnchor, 1_900_000, 31.2)).toBe(31.2)
+    expect(shownPosition(pausedWithoutAnchor, 1_002_500, null)).toBeNull()
   })
 
   it('goes on from the new anchor when the song resumes', () => {

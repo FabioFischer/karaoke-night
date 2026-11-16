@@ -1,17 +1,19 @@
-import { api, type Entry } from '../api'
+import { api } from '../api'
 import { useAction } from '../calls'
+import { listedEntries, moveOptions, type PlaylistView } from '../session'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
 import { PlaylistItem } from './PlaylistItem'
 
 interface Props {
-  entries: Entry[]
+  state: PlaylistView
   canSkip: boolean
 }
 
 /** The bottom bar of the setup: the playlist, this song included, and the skip to the next. */
-export function PlaylistBar({ entries, canSkip }: Props) {
+export function PlaylistBar({ state, canSkip }: Props) {
   const skip = useAction()
+  const entries = listedEntries(state)
   return (
     <footer className="bottom-bar playlist-bar">
       <div className="playlist-bar-head">
@@ -30,7 +32,7 @@ export function PlaylistBar({ entries, canSkip }: Props) {
       ) : (
         <ul className="playlist playlist-row">
           {entries.map((entry) => (
-            <PlaylistItem key={entry.id} entry={entry} />
+            <PlaylistItem key={entry.id} entry={entry} moves={moveOptions(state, entry.id)} />
           ))}
         </ul>
       )}

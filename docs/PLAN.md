@@ -391,9 +391,18 @@ Filled in by A10b, where the contract left a gap:
 - **Caching headers:** the cached routes answer `Vercel-CDN-Cache-Control: max-age=1` (`max-age=5` for the library), which only Vercel's edge reads and does not forward, and `Cache-Control: public, max-age=0, must-revalidate` for the browser. The uncached routes and every error answer `Cache-Control: no-store`.
 - **Store failures:** missing credentials, a store that does not answer or an error answer give 503 `{error: "store_unavailable"}` on every route, logged in Vercel. The phone shows it as the other refusals, in Portuguese.
 - **Request bodies:** `song` must be a JSON object and `entry_id` and `q` strings; the song is stored as sent, for the Stage to check. Fields beyond the contract's are dropped. The id is a random UUID. A body, or an id in the path, the function cannot read or write back (bad percent encoding, a song nested too deep) is 422 `invalid_request`.
-- **Unanswered requests:** after 15 s the phone shows the code `no_answer`, a generic "could not complete" in Portuguese; the request may still be applied later, so it says to check the playlist. An add or a remove whose POST is lost (no connection, or cut after 5 s) shows `no_answer` too, since the function may have stored it. A search that gets no answer or `expired` shows `search_no_answer` instead, which only says to try again. While it waits, a poll lost on the network, cut after 5 s, or answered `store_unavailable` is retried: the request is already stored.
+- **Unanswered requests:** after 15 s the phone shows the code `no_answer`, a generic "could not complete" in Portuguese; the request may still be applied later, so it says to check the playlist. An add, a remove or a move (B1) whose POST is lost (no connection, or cut after 5 s) shows `no_answer` too, since the function may have stored it. A search that gets no answer or `expired` shows `search_no_answer` instead, which only says to try again. While it waits, a poll lost on the network, cut after 5 s, or answered `store_unavailable` is retried: the request is already stored.
 - **Phone calls:** every call of the phone gives up after 5 s as `network`, so a hung poll never freezes the page. The phone words some codes its own way (`network`, `http_error`, `entry_playing`), since the public reaches the Stage through the internet and cannot act on it, and never shows the English detail.
 - **Before the clock is known:** until the first answer of the time route, the phone uses its own clock as it is.
+
+Filled in by B1b, where the contract left a gap:
+
+- **The position while paused:** the phone shows the paused anchor's `position_s` (never past `duration_s`) and does not move it on, so a phone that opens the page while paused shows the right line. A snapshot that plays without an anchor, paused or not, has no position: the phone holds the last one it showed for the same entry, or shows no current line when it showed none for that entry (never the previous song's position).
+- **A move lost on the way:** a move whose POST is lost shows `no_answer`, as an add or a remove does, since the function may have stored it.
+- **The volume steps on the TV:** a minus and a plus per volume, 2 dB a step, rounded to whole dB; a step from a value REAPER holds outside -30 to +6 dB lands back inside the range.
+- **Known and accepted by the maintainer, left as they are:**
+  - A quick double click on pause or resume is not guarded against beyond the button being disabled while its call runs; the live test checks what REAPER does with it.
+  - The reorder arrows can move an entry twice. On the TV, after a move the entry sits where the neighbor was, so a second quick click lands on the neighbor's arrow and can undo the move. On the phone, the button comes back when the Stage answers, before the snapshot with the new order arrives (about 1.5 s later), so a second tap in that window moves the entry again.
 
 ---
 

@@ -16,7 +16,8 @@ interface Anchor {
  * The anchor is the polled position and the moment it first arrived. A poll
  * that repeats the same position keeps the older anchor, since that value was
  * read at the earlier moment; from the anchor, the browser clock moves the
- * position on, every TICK_MS, while the song plays.
+ * position on, every TICK_MS, while the song plays. A resume anchors again,
+ * so the time spent paused never moves the position on.
  */
 export function useSongPosition(positionS: number | null, playing: boolean): number | null {
   const [anchor, setAnchor] = useState<Anchor | null>(null)
@@ -24,7 +25,7 @@ export function useSongPosition(positionS: number | null, playing: boolean): num
 
   useEffect(() => {
     if (positionS !== null) setAnchor({ position: positionS, at: performance.now() })
-  }, [positionS])
+  }, [positionS, playing])
 
   useEffect(() => {
     if (!playing) return

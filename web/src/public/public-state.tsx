@@ -117,6 +117,7 @@ export function PublicStateProvider({ children }: { children: ReactNode }) {
     library: publicApi.library,
     add: publicApi.add,
     remove: publicApi.remove,
+    move: publicApi.move,
     perform,
   }
   return (

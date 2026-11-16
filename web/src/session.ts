@@ -25,6 +25,23 @@ export function listedEntries(state: PlaylistView): Entry[] {
   return state.session.state === 'setup' ? state.playlist : upcomingEntries(state)
 }
 
+/** Which ways an entry can move in the playlist, or null when it cannot move at all. */
+export interface MoveOptions {
+  up: boolean
+  down: boolean
+}
+
+/**
+ * Only the entries behind the song of the session move, one place at a time,
+ * never past it and never past the end (docs/PLAN.md section 5.8, Reordering).
+ */
+export function moveOptions(state: PlaylistView, entryId: string): MoveOptions | null {
+  const current = state.playlist.findIndex((entry) => entry.id === state.session.entry_id)
+  const index = state.playlist.findIndex((entry) => entry.id === entryId)
+  if (index === -1 || index <= current) return null
+  return { up: index > current + 1, down: index < state.playlist.length - 1 }
+}
+
 /** m:ss, or an empty string for an unknown time. */
 export function formatTime(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return ''

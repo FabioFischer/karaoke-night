@@ -4,7 +4,7 @@ import { EntryStatus } from '../components/EntryStatus'
 import { LyricsText } from '../components/LyricsView'
 import { PlaylistItem } from '../components/PlaylistItem'
 import { LibraryView, SearchView } from '../components/SongFinder'
-import { currentEntry, formatTime, listedEntries, upcomingEntries } from '../session'
+import { currentEntry, formatTime, listedEntries, moveOptions, upcomingEntries } from '../session'
 import { sessionHeadings, text } from '../text'
 import { usePublicState, type PhoneState } from './public-state'
 import { useAnchoredPosition } from './useAnchoredPosition'
@@ -102,7 +102,9 @@ function NowPlaying({ state }: { state: PhoneState }) {
   return (
     <div className="phone-playing">
       <div className="playing-song">
-        <p className="eyebrow">{text.home.nowPlaying}</p>
+        <p className="eyebrow" role="status">
+          {state.session.paused ? text.public.paused : text.home.nowPlaying}
+        </p>
         <strong>{entry?.song.title}</strong>
         <span>
           {entry?.song.artist}
@@ -121,7 +123,7 @@ function NowPlaying({ state }: { state: PhoneState }) {
   )
 }
 
-/** The playlist: the song playing first, without remove, then every other entry with it. */
+/** The playlist: the song playing first, without remove, then every other entry with it and up and down. */
 function QueueTab({ state }: { state: PhoneState }) {
   const entry = currentEntry(state)
   const entries = listedEntries(state)
@@ -141,7 +143,7 @@ function QueueTab({ state }: { state: PhoneState }) {
       ) : (
         <ul className="playlist">
           {entries.map((item) => (
-            <PlaylistItem key={item.id} entry={item} />
+            <PlaylistItem key={item.id} entry={item} moves={moveOptions(state, item.id)} />
           ))}
         </ul>
       )}

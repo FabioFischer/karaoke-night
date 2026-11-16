@@ -105,6 +105,26 @@ describe('a request and its answer', () => {
     expect(outcome).toMatchObject({ done: true, value: { ok: true } })
   })
 
+  it('leaves a move with the entry and the way, and waits for its answer', async () => {
+    const bodies: unknown[] = []
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return json(200, { ok: true })
+      bodies.push(JSON.parse(String(init.body)))
+      return json(202, { id: 'r1' })
+    })
+    const outcome = settle(publicApi.move('e2', -1))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(bodies).toEqual([{ op: 'move', entry_id: 'e2', by: -1 }])
+    expect(outcome).toMatchObject({ done: true, value: { ok: true } })
+  })
+
+  it('turns a refused move into the error code', async () => {
+    stubRequests([() => json(200, { ok: false, error: 'entry_current' })])
+    const outcome = settle(publicApi.move('e1', 1))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(outcome.error).toMatchObject({ code: 'entry_current' })
+  })
+
   it('gives a search that is not answered its own code', async () => {
     stubRequests([])
     const outcome = settle(publicApi.search('words'))
@@ -183,6 +203,7 @@ describe('a request whose POST never answers', () => {
   it.each([
     ['an add', () => publicApi.add(SONG)],
     ['a remove', () => publicApi.remove('e1')],
+    ['a move', () => publicApi.move('e2', 1)],
   ])('gives %s up after 5 s as no_answer: it may be stored', async (_name, call) => {
     stubLatePost()
     const outcome = settle<unknown>(call())

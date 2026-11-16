@@ -42,6 +42,12 @@ export interface Entry {
 
 export type SessionState = 'setup' | 'playing' | 'results'
 
+/** The music's and the voices' volumes in dB, for the whole night. */
+export interface Volumes {
+  music_db: number
+  voice_db: number
+}
+
 export interface Session {
   state: SessionState
   entry_id: string | null
@@ -52,6 +58,9 @@ export interface Session {
   error: string | null
   detail: string | null
   stems: string[]
+  paused: boolean
+  /** Null until the Stage read them from REAPER. */
+  volumes: Volumes | null
 }
 
 export interface StageState {
@@ -75,7 +84,17 @@ export interface Lyrics {
   lines: LyricsLine[]
 }
 
-export type SessionAction = 'start' | 'stop' | 'play_next' | 'setup_next' | 'skip'
+export type SessionAction =
+  | 'start'
+  | 'stop'
+  | 'pause'
+  | 'resume'
+  | 'play_next'
+  | 'setup_next'
+  | 'skip'
+
+/** One place up (-1) or down (1) in the playlist. */
+export type MoveBy = -1 | 1
 
 /** A refusal of the Stage: a stable code for the screen, an English detail. */
 export class ApiError extends Error {
@@ -137,7 +156,10 @@ export const api = {
   add: (song: Song) => request<Entry>('POST', '/api/playlist', song),
   remove: (entryId: string) =>
     request<void>('DELETE', `/api/playlist/${encodeURIComponent(entryId)}`),
+  move: (entryId: string, by: MoveBy) =>
+    request<StageState>('POST', `/api/playlist/${encodeURIComponent(entryId)}/move`, { by }),
   settings: (muted: string[], key: number) =>
     request<StageState>('PUT', '/api/session/settings', { muted, key }),
+  setVolumes: (volumes: Volumes) => request<StageState>('PUT', '/api/session/volumes', volumes),
   act: (action: SessionAction) => request<StageState>('POST', `/api/session/${action}`),
 }

@@ -126,6 +126,25 @@ describe('POST /api/public/requests', () => {
     expect(store.commands.every(([name, key]) => name === 'RPUSH' && key === 'karaoke:requests')).toBe(true)
   })
 
+  it('stores a move one place either way, with only the contract fields', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_800_000_000_000)
+    const up = await post(JSON.stringify({ op: 'move', entry_id: 'e2', by: -1, index: 0 }))
+    const down = await post(JSON.stringify({ op: 'move', entry_id: 'e3', by: 1, song: SONG }))
+    vi.useRealTimers()
+
+    const ids = []
+    for (const response of [up, down]) {
+      expect(response.status).toBe(202)
+      ids.push(((await response.json()) as { id: string }).id)
+    }
+    const at_ms = 1_800_000_000_000
+    expect(storedRequests()).toEqual([
+      { id: ids[0], op: 'move', entry_id: 'e2', by: -1, at_ms },
+      { id: ids[1], op: 'move', entry_id: 'e3', by: 1, at_ms },
+    ])
+  })
+
   it.each([
     ['not JSON', '{oops'],
     ['an empty body', ''],
@@ -136,6 +155,13 @@ describe('POST /api/public/requests', () => {
     ['an add with a song that is an array', '{"op":"add","song":[]}'],
     ['a remove with a number id', '{"op":"remove","entry_id":3}'],
     ['a search without text', '{"op":"search"}'],
+    ['a move by two places', '{"op":"move","entry_id":"e2","by":2}'],
+    ['a move by no place', '{"op":"move","entry_id":"e2","by":0}'],
+    ['a move by part of a place', '{"op":"move","entry_id":"e2","by":0.5}'],
+    ['a move by a string', '{"op":"move","entry_id":"e2","by":"1"}'],
+    ['a move without by', '{"op":"move","entry_id":"e2"}'],
+    ['a move without an entry', '{"op":"move","by":1}'],
+    ['a move with a number id', '{"op":"move","entry_id":2,"by":1}'],
     ['a song nested too deep to store', `{"op":"add","song":${'{"a":'.repeat(200_000)}1${'}'.repeat(200_000)}}`],
   ])('refuses %s with 422 and stores nothing', async (_name, body) => {
     await expectUncached(await post(body), 422, '{"error":"invalid_request"}')

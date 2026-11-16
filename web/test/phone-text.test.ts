@@ -37,8 +37,11 @@ describe('the phone error messages', () => {
 
   it('leaves the TV messages as they were', () => {
     expect(errorMessage('network')).toBe('Sem conexão com o servidor do palco.')
+  })
+
+  it('sends the TV to the skip button, the only way a song that plays leaves', () => {
     expect(errorMessage('entry_playing')).toBe(
-      'A música que está tocando não pode sair da fila. Pare a música antes.',
+      'A música que está tocando não pode sair da fila. Pule a música antes.',
     )
   })
 })

@@ -3,7 +3,7 @@ import type { StageState } from '../api'
 import { EntryStatus } from '../components/EntryStatus'
 import { PlaylistItem } from '../components/PlaylistItem'
 import { SongFinder } from '../components/SongFinder'
-import { currentEntry, listedEntries } from '../session'
+import { currentEntry, listedEntries, moveOptions } from '../session'
 import { sessionHeadings, text } from '../text'
 
 /** /karaoke: the current song, the search and the library, and the playlist on the right. */
@@ -50,7 +50,7 @@ function PlaylistPanel({ state }: { state: StageState }) {
   return (
     <ul className="playlist">
       {entries.map((entry) => (
-        <PlaylistItem key={entry.id} entry={entry} />
+        <PlaylistItem key={entry.id} entry={entry} moves={moveOptions(state, entry.id)} />
       ))}
     </ul>
   )

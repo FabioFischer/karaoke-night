@@ -157,7 +157,7 @@ export const errorMessages: Record<string, string> = {
   no_song: 'Não há música na fila.',
   not_ready: 'A música ainda não está pronta.',
   wrong_state: 'Não dá para fazer isso agora.',
-  entry_playing: 'A música que está tocando não pode sair da fila. Pare a música antes.',
+  entry_playing: 'A música que está tocando não pode sair da fila. Pule a música antes.',
   entry_current: 'Essa música já é a da vez e não muda de lugar na fila.',
   not_addable: 'Essa música não pode ser adicionada.',
   invalid_request: 'O palco não entendeu o pedido.',

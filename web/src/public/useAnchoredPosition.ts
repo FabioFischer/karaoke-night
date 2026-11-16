@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { shownPosition } from './phone-clock'
+import { shownPosition, type ShownPosition } from './phone-clock'
 import type { PublicSession } from './public-api'
 
 const TICK_MS = 100
@@ -12,7 +12,7 @@ const TICK_MS = 100
  */
 export function useAnchoredPosition(session: PublicSession, storeNow: () => number): number | null {
   const [, setTick] = useState(0)
-  const lastShown = useRef<number | null>(null)
+  const lastShown = useRef<ShownPosition | null>(null)
   const playing = session.state === 'playing' && !session.paused && session.anchor !== null
 
   useEffect(() => {
@@ -22,6 +22,6 @@ export function useAnchoredPosition(session: PublicSession, storeNow: () => numb
   }, [playing])
 
   const position = shownPosition(session, storeNow(), lastShown.current)
-  lastShown.current = position
+  lastShown.current = { entry_id: session.entry_id, position }
   return position
 }

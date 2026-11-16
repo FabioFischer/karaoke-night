@@ -48,14 +48,16 @@ describe('the position the phone shows', () => {
   }
   const paused = { ...playing, paused: true, anchor: { position_s: 27.3, at_ms: 1_000_000 } }
   const pausedWithoutAnchor = { ...paused, anchor: null }
+  /** A position the phone showed for the entry e1. */
+  const shown = (position: number) => ({ entry_id: 'e1', position })
 
   it('follows the anchor while the song plays', () => {
-    expect(shownPosition(playing, 1_002_500, 12)).toBe(32.5)
+    expect(shownPosition(playing, 1_002_500, shown(12))).toBe(32.5)
   })
 
   it('shows where the song paused and never moves it on, whatever was shown before', () => {
-    expect(shownPosition(paused, 1_000_000, 29.5)).toBe(27.3)
-    expect(shownPosition(paused, 1_900_000, 29.5)).toBe(27.3)
+    expect(shownPosition(paused, 1_000_000, shown(29.5))).toBe(27.3)
+    expect(shownPosition(paused, 1_900_000, shown(29.5))).toBe(27.3)
   })
 
   it('shows where the song paused to a phone that opened the page while paused', () => {
@@ -67,19 +69,25 @@ describe('the position the phone shows', () => {
   })
 
   it('holds the last position shown for a paused snapshot without an anchor', () => {
-    expect(shownPosition(pausedWithoutAnchor, 1_002_500, 31.2)).toBe(31.2)
-    expect(shownPosition(pausedWithoutAnchor, 1_900_000, 31.2)).toBe(31.2)
+    expect(shownPosition(pausedWithoutAnchor, 1_002_500, shown(31.2))).toBe(31.2)
+    expect(shownPosition(pausedWithoutAnchor, 1_900_000, shown(31.2))).toBe(31.2)
     expect(shownPosition(pausedWithoutAnchor, 1_002_500, null)).toBeNull()
+  })
+
+  it('never holds the position shown for another song', () => {
+    const nextSong = { ...playing, entry_id: 'e2', anchor: null }
+    expect(shownPosition(nextSong, 1_002_500, shown(31.2))).toBeNull()
+    expect(shownPosition({ ...nextSong, paused: true }, 1_002_500, shown(31.2))).toBeNull()
   })
 
   it('goes on from the new anchor when the song resumes', () => {
     const resumed = { ...playing, anchor: { position_s: 31, at_ms: 1_500_000 } }
-    expect(shownPosition(resumed, 1_501_000, 31.2)).toBe(32)
+    expect(shownPosition(resumed, 1_501_000, shown(31.2))).toBe(32)
   })
 
   it('is null outside playing, whatever was shown before', () => {
-    expect(shownPosition({ ...paused, state: 'results' }, 1_000_000, 31.2)).toBeNull()
-    expect(shownPosition({ ...playing, state: 'setup', anchor: null }, 1_000_000, 31.2)).toBeNull()
+    expect(shownPosition({ ...paused, state: 'results' }, 1_000_000, shown(31.2))).toBeNull()
+    expect(shownPosition({ ...playing, state: 'setup', anchor: null }, 1_000_000, shown(31.2))).toBeNull()
   })
 })
 

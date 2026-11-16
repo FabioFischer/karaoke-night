@@ -9,6 +9,7 @@ import { StoreError, command, keys } from '../../../server/store.js'
 type PublicRequest =
   | { op: 'add'; song: object }
   | { op: 'remove'; entry_id: string }
+  | { op: 'move'; entry_id: string; by: -1 | 1 }
   | { op: 'search'; q: string }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -20,6 +21,9 @@ function readRequest(body: unknown): PublicRequest | null {
   if (body.op === 'add' && isObject(body.song)) return { op: 'add', song: body.song }
   if (body.op === 'remove' && typeof body.entry_id === 'string') {
     return { op: 'remove', entry_id: body.entry_id }
+  }
+  if (body.op === 'move' && typeof body.entry_id === 'string' && (body.by === -1 || body.by === 1)) {
+    return { op: 'move', entry_id: body.entry_id, by: body.by }
   }
   if (body.op === 'search' && typeof body.q === 'string') return { op: 'search', q: body.q }
   return null

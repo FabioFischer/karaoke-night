@@ -463,8 +463,8 @@ def test_pause_sends_the_pause_action_while_playback_moves(reaper, moving) -> No
 
 @pytest.mark.parametrize("still", [PAUSED, RECORD_PAUSED, STOPPED])
 def test_pause_never_resumes_or_starts_playback(reaper, still) -> None:
-    # 1008 toggles: sent while paused it would resume, while stopped it
-    # would start a paused playback.
+    # 1008 toggles: A6 saw a second press resume. What it does while stopped
+    # is not verified, so it is not sent then either.
     reaper.transport = [(still, 30.0)]
     player = connected(reaper)
 
@@ -539,6 +539,46 @@ def test_a_stop_by_hand_during_a_pause_still_ends_the_song(reaper) -> None:
 
 
 @pytest.mark.parametrize(
+    ("playstate", "paused"),
+    [(PLAYING, False), (PAUSED, True), (RECORDING, False), (RECORD_PAUSED, True)],
+)
+def test_paused_follows_the_playstate_of_the_last_read(
+    reaper, playstate, paused
+) -> None:
+    # A pause or a resume made by hand in REAPER shows too.
+    reaper.transport = [(playstate, 3.0)]
+    player = connected(reaper)
+    player.play()
+
+    player.position()
+
+    assert player.paused() is paused
+
+
+def test_not_paused_before_a_read_or_after_a_new_play(reaper) -> None:
+    reaper.transport = [(PAUSED, 3.0)]
+    player = connected(reaper)
+    assert player.paused() is False
+    player.position()
+    assert player.paused() is True
+
+    player.play()
+
+    assert player.paused() is False
+
+
+def test_pause_and_resume_do_not_change_what_paused_says(reaper) -> None:
+    # Only position() reads for the session, as it does for the end of song.
+    reaper.transport = [(PLAYING, 1.0), (PLAYING, 1.0)]
+    player = connected(reaper)
+    player.position()
+
+    player.pause()
+
+    assert player.paused() is False
+
+
+@pytest.mark.parametrize(
     ("db", "gain"),
     [(0.0, "1.000000"), (-8.0, "0.398107"), (6.0, "1.995262"), (-30.0, "0.031623")],
 )
@@ -552,8 +592,9 @@ def test_set_volume_sends_the_absolute_gain_of_the_db(reaper, db, gain) -> None:
 
 
 def test_a_volume_far_below_is_never_a_relative_or_exponent_value(reaper) -> None:
-    # A value starting with + or - is relative in dB, and an e ends the
-    # touch state; 1e-08 would carry both meanings.
+    # main.js: a value starting with + or - is relative in dB, and an e near
+    # the end ends the touch state. 1e-08 is neither a plain absolute value
+    # nor free of an e.
     reaper.tracks = ["Music"]
     player = connected(reaper)
 

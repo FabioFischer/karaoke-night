@@ -166,6 +166,12 @@ class Session:
             self._set(state="results", paused=False, error=None, detail=None)
 
     def pause(self) -> None:
+        """Pause REAPER, then read it at once.
+
+        The read shows paused and where REAPER paused in one change, since the
+        phone holds that position while paused. When it fails, the error shows
+        and the next poll reads the pause.
+        """
         with self._lock:
             self._require("playing")
             if self._paused:
@@ -174,9 +180,6 @@ class Session:
                 self._player.pause()
             except ReaperError as error:
                 self._raise(error)
-            self._set(paused=True, error=None, detail=None)
-            # The phone holds the anchor's position while paused, so it is read
-            # where REAPER paused, not taken from the last poll.
             self._poll(self._generation)
 
     def resume(self) -> None:
@@ -346,7 +349,10 @@ class Session:
                     return
 
     def _poll(self, generation: int) -> bool:
-        """Whether the song of generation still plays. The caller holds _lock."""
+        """Whether the song of generation still plays. The caller holds _lock.
+
+        paused follows REAPER, so a pause or a resume made in REAPER shows too.
+        """
         if generation != self._generation or self._state != "playing":
             return False
         try:
@@ -355,6 +361,7 @@ class Session:
             # REAPER read the position somewhere within the request.
             position_at_s = (asked + self._clock()) / 2
             ended = self._player.ended()
+            paused = self._player.paused()
         except ReaperError as error:
             self._set(error=reaper_code(error), detail=str(error))
             return True
@@ -369,7 +376,11 @@ class Session:
             )
             return False
         self._set(
-            position_s=position, position_at_s=position_at_s, error=None, detail=None
+            position_s=position,
+            position_at_s=position_at_s,
+            paused=paused,
+            error=None,
+            detail=None,
         )
         return True
 

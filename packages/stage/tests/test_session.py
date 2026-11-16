@@ -525,9 +525,66 @@ def test_pause_pauses_reaper_and_the_song_keeps_playing(
 
     session.pause()
 
-    assert player.names()[-3:] == ["pause", "position", "ended"]
+    assert player.names()[-4:] == ["pause", "position", "ended", "paused"]
     view = session.view()
     assert (view.state, view.paused) == ("playing", True)
+
+
+def test_pause_shows_paused_and_where_it_paused_at_once(
+    session, playlist, player
+) -> None:
+    """The publisher reads the view without the lock: a paused view with the
+    position of the last poll would go out as the phone's held position."""
+    playlist.add(library_song(FIRST))
+    player.positions = [5.0, 5.4]
+    session.start()
+    session.poll()
+    seen = []
+
+    def look(name: str) -> None:
+        if name in ("position", "ended", "paused"):
+            view = session.view()
+            seen.append((view.paused, view.position_s))
+
+    player.on_call = look
+
+    session.pause()
+
+    assert seen == [(False, 5.0)] * 3
+    assert (session.view().paused, session.view().position_s) == (True, 5.4)
+
+
+def test_a_pause_made_in_reaper_shows_on_the_next_poll(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+    player.reaper_paused = True
+
+    session.poll()
+
+    assert session.view().paused is True
+    refused(session.pause, "wrong_state")
+    session.resume()
+    assert player.names().count("resume") == 1
+    assert session.view().paused is False
+
+
+def test_a_resume_made_in_reaper_shows_on_the_next_poll(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+    session.pause()
+    player.reaper_paused = False
+
+    session.poll()
+
+    assert session.view().paused is False
+    refused(session.resume, "wrong_state")
+    session.pause()
+    assert player.names().count("pause") == 2
+    assert session.view().paused is True
 
 
 def test_pause_reads_where_reaper_paused(playlist, packages, player) -> None:
@@ -634,9 +691,12 @@ def test_a_song_ended_during_a_pause_shows_the_results(
     session, playlist, player
 ) -> None:
     playlist.add(library_song(FIRST))
+    # The read of pause, then a poll that sees the song ended (a stop by hand).
+    player.positions = [30.0, 30.0]
     player.end = True
     session.start()
     session.pause()
+    assert (session.view().state, session.view().paused) == ("playing", True)
 
     session.poll()
 
@@ -876,6 +936,21 @@ def test_move_of_an_unknown_entry_is_refused(session, playlist) -> None:
     playlist.add(library_song(FIRST))
 
     refused(lambda: session.move("unknown", 1), "unknown_entry")
+
+
+def test_a_late_move_of_the_song_played_and_removed_is_an_unknown_entry(
+    session, playlist
+) -> None:
+    played = playlist.add(library_song(FIRST))
+    following = playlist.add(library_song(SECOND))
+    session.start()
+    session.stop()
+    session.remove(played.id)
+
+    # Still the session's own entry, but no longer in the playlist.
+    assert session.view().entry_id == played.id
+    refused(lambda: session.move(played.id, 1), "unknown_entry")
+    assert ids(playlist) == [following.id]
 
 
 @pytest.mark.parametrize("by", [0, 2, -2, True, 1.0])

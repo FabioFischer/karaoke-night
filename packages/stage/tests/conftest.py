@@ -381,11 +381,16 @@ class FakePlayer:
     method name to the exception it raises. Each call holds for delay_s, so
     a call made while another runs shows up in overlaps. volumes_db holds
     the volume of each track by name, as the template's faders start.
+    reaper_paused is REAPER's own pause, which pause() and resume() set and
+    a test sets to pause or resume by hand; paused() reports it. on_call,
+    when set, runs with the name of each call before it is made.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.volumes_db: dict[str, float] = {"Music": -8.0, "Mic 1": 0.0, "Mic 2": 0.0}
+        self.reaper_paused = False
+        self.on_call: Callable[[str], None] | None = None
         self.positions: list[float] = [0.0]
         self.end = False
         self.failures: dict[str, Exception] = {}
@@ -401,6 +406,8 @@ class FakePlayer:
             if self._active > 1:
                 self.overlaps += 1
         try:
+            if self.on_call is not None:
+                self.on_call(name)
             if self.delay_s:
                 time.sleep(self.delay_s)
             # One lookup: a test may remove the failure while a thread calls.
@@ -437,11 +444,17 @@ class FakePlayer:
         self._call("ended")
         return self.end and self._reads >= len(self.positions)
 
+    def paused(self) -> bool:
+        self._call("paused")
+        return self.reaper_paused
+
     def pause(self) -> None:
         self._call("pause")
+        self.reaper_paused = True
 
     def resume(self) -> None:
         self._call("resume")
+        self.reaper_paused = False
 
     def set_volume_db(self, track: str, db: float) -> None:
         self._call("set_volume_db", track, db)

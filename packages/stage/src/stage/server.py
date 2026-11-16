@@ -15,7 +15,7 @@ from core.manifest import Manifest
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, FiniteFloat, StrictInt, ValidationError
+from pydantic import BaseModel, StrictInt, ValidationError
 from starlette.exceptions import HTTPException
 
 from stage import library as lib
@@ -61,9 +61,10 @@ class Settings(BaseModel):
 
 
 class VolumesRequest(BaseModel):
-    # Python's JSON reader takes Infinity and NaN, which are no volume.
-    music_db: FiniteFloat
-    voice_db: FiniteFloat
+    """Any number, as the contract says; the screen keeps the range."""
+
+    music_db: float
+    voice_db: float
 
 
 class MoveRequest(BaseModel):

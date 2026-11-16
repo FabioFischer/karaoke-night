@@ -24,8 +24,9 @@ import httpx2
 DEFAULT_URL = "http://127.0.0.1:8080"
 _SECTION = "karaoke"
 _PLAY, _STOP, _GO_TO_START = "1007", "1016", "40042"
-# Toggles: pauses a moving playback, resumes a paused one, and starts a paused
-# playback when stopped.
+# The pause button of REAPER's own web page (index.html in reaper_www_root);
+# main.js does not describe it. A6 saw a second press resume playback, so it
+# toggles. What it does while stopped is not verified.
 _PAUSE = "1008"
 # TRANSPORT playstate: 0 stopped, 1 playing, 2 paused, 5 recording, 6 record
 # paused.
@@ -61,6 +62,9 @@ class Player(Protocol):
 
     def ended(self) -> bool:
         """Whether the song played to its end, as of the last position()."""
+
+    def paused(self) -> bool:
+        """Whether playback is paused, as of the last position(), whoever paused."""
 
     def pause(self) -> None:
         """Pause where the song is; never resumes it."""
@@ -154,8 +158,8 @@ def gain_to_db(gain: float) -> float:
 
 
 def volume_command(index: int, db: float) -> str:
-    # Absolute and plain: a value starting with + or - is relative in dB, and
-    # an "e" in it ends the touch state, so no sign and no exponent.
+    # Absolute and plain. main.js: a value starting with + or - is relative in
+    # dB, and an "e" near the end ends the touch state; so no sign, no exponent.
     return f"SET/TRACK/{index}/VOL/{db_to_gain(db):.6f}"
 
 
@@ -291,6 +295,9 @@ class ReaperPlayer:
 
     def ended(self) -> bool:
         return self._ended
+
+    def paused(self) -> bool:
+        return self._last is not None and self._last.playstate in _PAUSED
 
     def _transport(self) -> Transport:
         """Read the transport; only position() follows it for the end of song."""

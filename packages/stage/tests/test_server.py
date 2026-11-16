@@ -120,8 +120,6 @@ def test_volumes_are_set_in_db_and_answer_the_state(stage, player) -> None:
     [
         '{"music_db": -3}',
         '{"music_db": "loud", "voice_db": 0}',
-        '{"music_db": Infinity, "voice_db": 0}',
-        '{"music_db": 0, "voice_db": NaN}',
     ],
 )
 def test_volumes_that_are_not_two_numbers_are_invalid(stage, player, body) -> None:

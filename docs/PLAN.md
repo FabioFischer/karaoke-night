@@ -393,6 +393,12 @@ Filled in by A10b, where the contract left a gap:
 - **Phone calls:** every call of the phone gives up after 5 s as `network`, so a hung poll never freezes the page. The phone words some codes its own way (`network`, `http_error`, `entry_playing`), since the public reaches the Stage through the internet and cannot act on it, and never shows the English detail.
 - **Before the clock is known:** until the first answer of the time route, the phone uses its own clock as it is.
 
+Filled in by B1b, where the contract left a gap:
+
+- **The position while paused:** a paused snapshot carries no anchor, so no position. The phone holds the last position it showed, which can be past where the song paused by up to a poll and a publish (about 2 to 3 s), until the anchor of the resume corrects it. A phone that opens the page while paused shows no current line until then.
+- **A move lost on the way:** a move whose POST is lost shows `no_answer`, as an add or a remove does, since the function may have stored it.
+- **The volume steps on the TV:** a minus and a plus per volume, 2 dB a step, rounded to whole dB; a step from a value REAPER holds outside -30 to +6 dB lands back inside the range.
+
 ---
 
 ## 6. Execution plan

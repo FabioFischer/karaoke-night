@@ -395,9 +395,12 @@ Filled in by A10b, where the contract left a gap:
 
 Filled in by B1b, where the contract left a gap:
 
-- **The position while paused:** the phone shows the paused anchor's `position_s` (never past `duration_s`) and does not move it on, so a phone that opens the page while paused shows the right line. A snapshot that plays without an anchor, paused or not, has no position: the phone holds the last one it showed, or shows no current line when it showed none.
+- **The position while paused:** the phone shows the paused anchor's `position_s` (never past `duration_s`) and does not move it on, so a phone that opens the page while paused shows the right line. A snapshot that plays without an anchor, paused or not, has no position: the phone holds the last one it showed for the same entry, or shows no current line when it showed none for that entry (never the previous song's position).
 - **A move lost on the way:** a move whose POST is lost shows `no_answer`, as an add or a remove does, since the function may have stored it.
 - **The volume steps on the TV:** a minus and a plus per volume, 2 dB a step, rounded to whole dB; a step from a value REAPER holds outside -30 to +6 dB lands back inside the range.
+- **Known and accepted by the maintainer, left as they are:**
+  - A quick double click on pause or resume is not guarded against beyond the button being disabled while its call runs; the live test checks what REAPER does with it.
+  - The reorder arrows can move an entry twice. On the TV, after a move the entry sits where the neighbor was, so a second quick click lands on the neighbor's arrow and can undo the move. On the phone, the button comes back when the Stage answers, before the snapshot with the new order arrives (about 1.5 s later), so a second tap in that window moves the entry again.
 
 ---
 

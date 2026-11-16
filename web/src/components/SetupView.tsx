@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import { api, type StageState } from '../api'
-import { currentEntry, listedEntries, sessionFailure } from '../session'
+import { currentEntry, sessionFailure } from '../session'
 import { useAction } from '../calls'
 import { text } from '../text'
 import { ErrorNote } from './ErrorNote'
@@ -8,13 +8,15 @@ import { KeyControl } from './KeyControl'
 import { PlaylistBar } from './PlaylistBar'
 import { ReadinessBar } from './ReadinessBar'
 import { StemToggles } from './StemToggles'
+import { VolumeControl } from './VolumeControl'
 
-/** Stage mode before the song: readiness, stems, key, the start button and the playlist. */
+/** Stage mode before the song: readiness, stems, key, volumes, the start button and the playlist. */
 export function SetupView({ state }: { state: StageState }) {
   const { session } = state
   const entry = currentEntry(state)
   const settings = useAction()
   const start = useAction()
+  const volumes = useAction()
 
   function toggleStem(stem: string) {
     const muted = session.muted.includes(stem)
@@ -27,7 +29,7 @@ export function SetupView({ state }: { state: StageState }) {
     settings.run(() => api.settings(session.muted, key))
   }
 
-  const failure = settings.error ?? start.error ?? sessionFailure(session)
+  const failure = settings.error ?? volumes.error ?? start.error ?? sessionFailure(session)
   return (
     <div className="screen-with-bar">
       <main className="setup">
@@ -61,6 +63,14 @@ export function SetupView({ state }: { state: StageState }) {
               <h2>{text.setup.key}</h2>
               <KeyControl value={session.key} disabled={settings.busy} onChange={changeKey} />
             </section>
+            <section>
+              <h2>{text.setup.volumes}</h2>
+              <VolumeControl
+                volumes={session.volumes}
+                disabled={volumes.busy}
+                onChange={(next) => volumes.run(() => api.setVolumes(next))}
+              />
+            </section>
             {failure && <ErrorNote code={failure.code} detail={failure.detail} />}
             <button
               type="button"
@@ -73,7 +83,7 @@ export function SetupView({ state }: { state: StageState }) {
           </>
         )}
       </main>
-      <PlaylistBar entries={listedEntries(state)} canSkip={entry !== null} />
+      <PlaylistBar state={state} canSkip={entry !== null} />
     </div>
   )
 }

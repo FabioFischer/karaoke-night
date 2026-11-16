@@ -17,6 +17,21 @@ export function anchoredPosition(session: PublicSession, storeNowMs: number): nu
   return session.duration_s === null ? position : Math.min(position, session.duration_s)
 }
 
+/**
+ * The position the phone shows. While playing, the anchor is null only when
+ * the song is paused, and a paused snapshot carries no position: the phone
+ * holds the last one it showed, which can be up to a poll past where the
+ * song paused, until the new anchor of the resume corrects it.
+ */
+export function shownPosition(
+  session: PublicSession,
+  storeNowMs: number,
+  lastShown: number | null,
+): number | null {
+  if (session.state === 'playing' && session.anchor === null) return lastShown
+  return anchoredPosition(session, storeNowMs)
+}
+
 /** No snapshot, or one published more than OFFLINE_AFTER_MS ago in the store's clock. */
 export function isOffline(publishedAtMs: number | null, storeNowMs: number): boolean {
   return publishedAtMs === null || storeNowMs - publishedAtMs > OFFLINE_AFTER_MS

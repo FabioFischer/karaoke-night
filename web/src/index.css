@@ -261,6 +261,17 @@ button:disabled {
   color: var(--text-muted);
 }
 
+/* Up and down side by side above remove, so the column stays as narrow as remove alone. */
+.playlist-item-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+}
+
+.playlist-item-actions > :last-child {
+  grid-column: 1 / -1;
+}
+
 /* Search and library */
 
 .finder {
@@ -459,6 +470,35 @@ button:disabled {
   text-align: center;
 }
 
+.volume-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1.6rem;
+}
+
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.volume-label {
+  font-weight: 600;
+}
+
+.volume button {
+  min-width: 2.8rem;
+  font-size: 1.4rem;
+}
+
+.volume output {
+  min-width: 4.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .button-start {
   margin-top: 0.6rem;
   min-width: 16rem;
@@ -547,6 +587,16 @@ button:disabled {
   min-width: 9rem;
   border-color: var(--error);
   font-size: 1.3rem;
+}
+
+.button-pause {
+  min-width: 9rem;
+  font-size: 1.3rem;
+}
+
+.button-pause[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .playing-song {

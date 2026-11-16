@@ -17,6 +17,10 @@ export const text = {
     upcoming: 'Na fila',
     noUpcoming: 'Nenhuma outra música na fila.',
     remove: 'Tirar da fila',
+    moveUp: 'Subir na fila',
+    moveDown: 'Descer na fila',
+    up: '↑',
+    down: '↓',
   },
 
   finder: {
@@ -55,11 +59,27 @@ export const text = {
     starting: 'Começando...',
     playlist: 'Fila',
     skip: 'Pular para a próxima',
+    volumes: 'Volume',
+  },
+
+  volumes: {
+    music: 'Música',
+    voice: 'Microfones',
+    musicDown: 'Baixar a música',
+    musicUp: 'Aumentar a música',
+    voiceDown: 'Baixar os microfones',
+    voiceUp: 'Aumentar os microfones',
+    waiting: 'Os volumes aparecem quando o palco se conectar ao REAPER.',
   },
 
   playing: {
-    stop: 'Parar',
-    stopping: 'Parando...',
+    // Skipping a song that plays stops it and shows the results.
+    skip: 'Pular música',
+    skipping: 'Pulando...',
+    pause: 'Pausar',
+    pausing: 'Pausando...',
+    resume: 'Continuar',
+    resuming: 'Continuando...',
     noLyrics: 'Esta música não tem letra.',
     lyricsFailed: 'Não foi possível carregar a letra.',
     instrumental: '♪',
@@ -83,6 +103,7 @@ export const text = {
     offline: 'O karaokê está fora do ar. O que aparece aqui pode estar desatualizado.',
     notLive: 'O karaokê não está no ar agora.',
     library: 'Biblioteca',
+    paused: 'Música pausada',
   },
 }
 
@@ -137,6 +158,7 @@ export const errorMessages: Record<string, string> = {
   not_ready: 'A música ainda não está pronta.',
   wrong_state: 'Não dá para fazer isso agora.',
   entry_playing: 'A música que está tocando não pode sair da fila. Pare a música antes.',
+  entry_current: 'Essa música já é a da vez e não muda de lugar na fila.',
   not_addable: 'Essa música não pode ser adicionada.',
   invalid_request: 'O palco não entendeu o pedido.',
   not_found: 'O palco não conhece esse endereço.',
@@ -189,6 +211,12 @@ export function entryStateText(entry: Entry): string {
     return `${state}: ${errorMessage(entry.error)}`
   }
   return state
+}
+
+/** A volume in whole dB, with its sign. */
+export function volumeText(db: number): string {
+  const rounded = Math.round(db)
+  return `${rounded > 0 ? '+' : ''}${rounded} dB`
 }
 
 export function keyText(key: number): string {

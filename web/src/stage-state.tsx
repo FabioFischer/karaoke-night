@@ -73,6 +73,7 @@ export function StageStateProvider({ children }: { children: ReactNode }) {
     library: api.library,
     add: api.add,
     remove: api.remove,
+    move: api.move,
     perform,
   }
   return (

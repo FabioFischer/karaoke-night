@@ -5,6 +5,7 @@ import {
   request,
   type Entry,
   type Lyrics,
+  type MoveBy,
   type SearchAnswer,
   type SessionState,
   type Song,
@@ -28,6 +29,8 @@ export interface PublicSession {
   state: SessionState
   entry_id: string | null
   duration_s: number | null
+  paused: boolean
+  /** Null outside playing and while paused. */
   anchor: Anchor | null
 }
 
@@ -49,6 +52,7 @@ type Answer =
 type PublicRequest =
   | { op: 'add'; song: Song }
   | { op: 'remove'; entry_id: string }
+  | { op: 'move'; entry_id: string; by: MoveBy }
   | { op: 'search'; q: string }
 
 function sleep(ms: number): Promise<void> {
@@ -130,6 +134,7 @@ export const publicApi = {
     request<{ now_ms: number }>('GET', '/api/public/time', undefined, timeout(CALL_TIMEOUT_MS)),
   add: (song: Song) => askOk({ op: 'add', song }),
   remove: (entryId: string) => askOk({ op: 'remove', entry_id: entryId }),
+  move: (entryId: string, by: MoveBy) => askOk({ op: 'move', entry_id: entryId, by }),
   /** A search that got no answer, or one too old for the Stage, is just a search to try again. */
   search: async (query: string): Promise<SearchAnswer> => {
     try {

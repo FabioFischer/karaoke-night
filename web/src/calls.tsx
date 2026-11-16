@@ -1,5 +1,5 @@
 import { createContext, useContext, useState } from 'react'
-import { toApiError, type ApiError, type SearchAnswer, type Song } from './api'
+import { toApiError, type ApiError, type MoveBy, type SearchAnswer, type Song } from './api'
 
 /**
  * How the shared components reach the Stage. The TV calls the Stage API
@@ -11,6 +11,7 @@ export interface StageCalls {
   library: () => Promise<{ songs: Song[] }>
   add: (song: Song) => Promise<unknown>
   remove: (entryId: string) => Promise<unknown>
+  move: (entryId: string, by: MoveBy) => Promise<unknown>
   /** Runs a call, then shows its outcome: the state it answered, or a fresh poll. */
   perform: (call: () => Promise<unknown>) => Promise<void>
 }

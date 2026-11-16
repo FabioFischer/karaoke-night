@@ -1,7 +1,7 @@
 """The player behind the Stage, and REAPER as one (docs/PLAN.md sections 4 and 5.4).
 
 ReaperPlayer drives REAPER through its built-in web interface. Transport,
-tracks and mute go straight to it; load, transpose and ping go to the Lua
+tracks, mute and volume go straight to it; load, transpose and ping go to the Lua
 listener (reaper/scripts/karaoke_listener.lua) through ExtState: the command is
 written to karaoke/cmd and the reply read back from karaoke/ack, matched by id.
 The protocol is the top comment of main.js in REAPER's reaper_www_root
@@ -10,6 +10,7 @@ folder.
 
 import itertools
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,9 +24,17 @@ import httpx2
 DEFAULT_URL = "http://127.0.0.1:8080"
 _SECTION = "karaoke"
 _PLAY, _STOP, _GO_TO_START = "1007", "1016", "40042"
+# The pause button of REAPER's own web page (index.html in reaper_www_root);
+# main.js does not describe it. A6 saw a second press resume playback, so it
+# toggles. What it does while stopped is not verified.
+_PAUSE = "1008"
 # TRANSPORT playstate: 0 stopped, 1 playing, 2 paused, 5 recording, 6 record
 # paused.
 _STOPPED = 0
+_MOVING = (1, 5)
+_PAUSED = (2, 6)
+# REAPER shows -inf dB below about -150 dB, and JSON has no -inf.
+SILENT_DB = -150.0
 _ESCAPES = {"n": "\n", "t": "\t", "\\": "\\"}
 _HTTP_TIMEOUT = httpx2.Timeout(2.0)
 _UNREACHABLE = (httpx2.HTTPError, httpx2.InvalidURL)
@@ -54,6 +63,21 @@ class Player(Protocol):
     def ended(self) -> bool:
         """Whether the song played to its end, as of the last position()."""
 
+    def paused(self) -> bool:
+        """Whether playback is paused, as of the last position(), whoever paused."""
+
+    def pause(self) -> None:
+        """Pause where the song is; never resumes it."""
+
+    def resume(self) -> None:
+        """Play on from where the song paused; never pauses it, never from the start."""
+
+    def set_volume_db(self, track: str, db: float) -> None:
+        """The volume of the track named so, in dB."""
+
+    def volume_db(self, track: str) -> float:
+        """The current volume of the track named so, in dB."""
+
 
 class ReaperError(Exception):
     """REAPER could not be reached, or did not do what it was asked."""
@@ -70,6 +94,8 @@ class ListenerSilent(ReaperError):
 class Track(NamedTuple):
     index: int
     name: str
+    # A gain: 0 is -inf, 1 is 0 dB.
+    volume: float
 
 
 @dataclass(frozen=True)
@@ -116,7 +142,25 @@ def _fields(reply: str, command: str) -> list[list[str]]:
 
 
 def parse_tracks(reply: str) -> list[Track]:
-    return [Track(int(fields[1]), fields[2]) for fields in _fields(reply, "TRACK")]
+    return [
+        Track(int(fields[1]), fields[2], float(fields[4]))
+        for fields in _fields(reply, "TRACK")
+    ]
+
+
+def db_to_gain(db: float) -> float:
+    return 10 ** (db / 20)
+
+
+def gain_to_db(gain: float) -> float:
+    """Rounded to hundredths, as REAPER shows a volume."""
+    return round(20 * math.log10(max(gain, db_to_gain(SILENT_DB))), 2)
+
+
+def volume_command(index: int, db: float) -> str:
+    # Absolute and plain. main.js: a value starting with + or - is relative in
+    # dB, and an "e" near the end ends the touch state; so no sign, no exponent.
+    return f"SET/TRACK/{index}/VOL/{db_to_gain(db):.6f}"
 
 
 def track_index_map(tracks: list[Track]) -> dict[str, int]:
@@ -211,13 +255,28 @@ class ReaperPlayer:
         self._request(_STOP)
 
     def set_mute(self, stem: str, muted: bool) -> None:
-        index = track_index_map(self._tracks).get(stem.lower())
-        if index is None:
-            names = ", ".join(track.name for track in self._tracks if track.index)
-            raise ReaperError(
-                f"REAPER has no track named {stem!r}; its tracks are: {names}"
-            )
-        self._request(f"SET/TRACK/{index}/MUTE/{int(muted)}")
+        self._request(f"SET/TRACK/{self._index(stem)}/MUTE/{int(muted)}")
+
+    def pause(self) -> None:
+        # The pause action toggles, so it is sent only while playback moves.
+        if self._transport().playstate in _MOVING:
+            self._request(_PAUSE)
+
+    def resume(self) -> None:
+        # Never play(): it goes to the start first.
+        if self._transport().playstate in _PAUSED:
+            self._request(_PAUSE)
+
+    def set_volume_db(self, track: str, db: float) -> None:
+        # Volumes can be set before any load, which reads the tracks.
+        if track.lower() not in track_index_map(self._tracks):
+            self.connect()
+        self._request(volume_command(self._index(track), db))
+
+    def volume_db(self, track: str) -> float:
+        self.connect()
+        index = self._index(track)
+        return gain_to_db(next(t.volume for t in self._tracks if t.index == index))
 
     def transpose(self, semitones: int) -> None:
         self._command("transpose", semitones=semitones)
@@ -226,9 +285,7 @@ class ReaperPlayer:
         self._command("ping")
 
     def position(self) -> float:
-        now = parse_transport(self._request("TRANSPORT"))
-        if now is None:
-            raise ReaperError("REAPER's web interface sent no TRANSPORT line")
+        now = self._transport()
         if self._last is not None and song_ended(
             self._last, now, stop_requested=self._stop_requested
         ):
@@ -238,6 +295,26 @@ class ReaperPlayer:
 
     def ended(self) -> bool:
         return self._ended
+
+    def paused(self) -> bool:
+        return self._last is not None and self._last.playstate in _PAUSED
+
+    def _transport(self) -> Transport:
+        """Read the transport; only position() follows it for the end of song."""
+        now = parse_transport(self._request("TRANSPORT"))
+        if now is None:
+            raise ReaperError("REAPER's web interface sent no TRANSPORT line")
+        return now
+
+    def _index(self, name: str) -> int:
+        """The index of the track named so, as of the last track list read."""
+        index = track_index_map(self._tracks).get(name.lower())
+        if index is None:
+            names = ", ".join(track.name for track in self._tracks if track.index)
+            raise ReaperError(
+                f"REAPER has no track named {name!r}; its tracks are: {names}"
+            )
+        return index
 
     def _command(self, op: str, **fields) -> dict:
         """Send a listener command and return its ack, once one has its id.

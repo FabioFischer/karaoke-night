@@ -29,6 +29,18 @@ def no_store_variables(monkeypatch) -> None:
     monkeypatch.delenv("KARAOKE_STORE_TOKEN", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def fake_reaper(monkeypatch, reaper):
+    """A test never reaches the REAPER of the machine: serve reads its volumes."""
+    real = cli.ReaperPlayer
+
+    def player(http=None, **options):
+        return real(http=reaper.http(), **options)
+
+    monkeypatch.setattr(cli, "ReaperPlayer", player)
+    return reaper
+
+
 @pytest.fixture
 def server(monkeypatch) -> Server:
     server = Server()
@@ -40,6 +52,36 @@ def test_serve_binds_the_loopback_on_port_8791(server, tmp_path: Path) -> None:
     assert cli.main(["serve", "--library", str(tmp_path)]) == 0
 
     assert server.started == [("127.0.0.1", 8791)]
+
+
+def test_serve_reads_the_volumes_from_reaper_at_start(
+    server, reaper, tmp_path: Path, capsys
+) -> None:
+    reaper.tracks = ["Mic 1", "Mic 2", "Music", "Lead"]
+    reaper.volumes = {1: 0.501187, 3: 0.398107}
+    server.use = lambda client: client.get("/api/state").json()["session"]
+
+    cli.main(["serve", "--library", str(tmp_path)])
+
+    assert server.result["volumes"] == {"music_db": -8.0, "voice_db": -6.0}
+    assert "volumes" not in capsys.readouterr().err
+
+
+def test_serve_without_the_volumes_says_so_and_serves(
+    server, reaper, tmp_path: Path, capsys
+) -> None:
+    reaper.tracks = ["Mic 1", "Mic 2", "Lead"]
+    server.use = lambda client: client.get("/api/state").json()["session"]
+
+    assert cli.main(["serve", "--library", str(tmp_path)]) == 0
+
+    assert server.result["volumes"] is None
+    assert server.result["error"] is None
+    assert (
+        "stage serve: could not read the volumes from REAPER (REAPER has no track "
+        "named 'Music'; its tracks are: Mic 1, Mic 2, Lead); they are read again "
+        "when a song starts\n"
+    ) in capsys.readouterr().err
 
 
 def test_port_option(server, tmp_path: Path) -> None:

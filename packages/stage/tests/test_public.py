@@ -93,6 +93,7 @@ def test_the_first_cycle_learns_the_store_clock_then_publishes(stage) -> None:
             "state": "setup",
             "entry_id": None,
             "duration_s": None,
+            "paused": False,
             "anchor": None,
         },
         "playlist": [],
@@ -118,6 +119,7 @@ def test_a_playing_snapshot_carries_the_anchor_and_the_lyrics(stage) -> None:
             "state": "playing",
             "entry_id": first.id,
             "duration_s": 200.0,
+            "paused": False,
             "anchor": {"position_s": 42.5, "at_ms": STORE_START_MS + 42_000},
         },
         "playlist": [
@@ -287,9 +289,56 @@ def test_the_end_of_a_song_is_published_without_anchor_or_lyrics(stage) -> None:
         "state": "results",
         "entry_id": entry.id,
         "duration_s": 200.0,
+        "paused": False,
         "anchor": None,
     }
     assert stage.snapshot()["lyrics"] is None
+
+
+def test_a_pause_is_published_at_once_with_the_position_it_paused_at(stage) -> None:
+    stage.add(FIRST)
+    stage.session.start()
+    stage.publisher.cycle()
+    stage.player.positions = [10.2]
+    stage.tick(10.0)
+    stage.session.pause()
+    stage.tick(0.5)
+
+    stage.publisher.cycle()
+
+    session = stage.snapshot()["session"]
+    assert (session["state"], session["paused"]) == ("playing", True)
+    # The phone holds position_s while paused.
+    assert session["anchor"] == {
+        "position_s": 10.2,
+        "at_ms": STORE_START_MS + 10_000,
+    }
+    assert stage.snapshot()["lyrics"] is not None
+
+
+def test_a_resume_publishes_an_anchor_from_the_moment_it_returned(stage) -> None:
+    stage.add(FIRST)
+    stage.session.start()
+    stage.player.positions = [10.0]
+    stage.tick(10.0)
+    stage.session.poll()
+    stage.session.pause()
+    stage.publisher.cycle()
+    stage.tick(30.0)
+    # A poll during the pause reads the position it paused at.
+    stage.session.poll()
+    stage.tick(5.0)
+
+    stage.session.resume()
+    stage.tick(0.4)
+    stage.publisher.cycle()
+
+    session = stage.snapshot()["session"]
+    assert session["paused"] is False
+    assert session["anchor"] == {
+        "position_s": 10.0,
+        "at_ms": STORE_START_MS + 45_000,
+    }
 
 
 def test_details_and_session_errors_are_not_published(stage) -> None:
@@ -311,7 +360,13 @@ def test_details_and_session_errors_are_not_published(stage) -> None:
     stage.publisher.cycle()
 
     snapshot = stage.snapshot()
-    assert set(snapshot["session"]) == {"state", "entry_id", "duration_s", "anchor"}
+    assert set(snapshot["session"]) == {
+        "state",
+        "entry_id",
+        "duration_s",
+        "paused",
+        "anchor",
+    }
     failed = snapshot["playlist"][1]
     assert set(failed) == {"id", "state", "step", "progress", "error", "song"}
     assert (failed["state"], failed["error"]) == ("failed", "no_studio")
@@ -582,6 +637,85 @@ def test_a_remove_answers_ok_or_the_refusal(reader, stage) -> None:
     assert reader.answer("r2") == {"ok": False, "error": "unknown_entry"}
     assert reader.answer("r3") == {"ok": False, "error": "entry_playing"}
     assert [entry.id for entry in stage.playlist.entries()] == [playing.id]
+
+
+def test_a_move_answers_ok_or_the_refusal(reader, stage) -> None:
+    playing = stage.add(FIRST)
+    second = stage.add(SECOND)
+    third = stage.add(SECOND)
+    stage.session.start()
+    reader.send(
+        {"id": "r1", "op": "move", "entry_id": third.id, "by": -1},
+        {"id": "r2", "op": "move", "entry_id": third.id, "by": -1},
+        {"id": "r3", "op": "move", "entry_id": playing.id, "by": 1},
+        {"id": "r4", "op": "move", "entry_id": "unknown", "by": 1},
+        {"id": "r5", "op": "move", "entry_id": second.id, "by": 1},
+    )
+
+    reader.run()
+
+    assert reader.answer("r1") == {"ok": True}
+    assert reader.answer("r2") == {"ok": True}
+    assert reader.answer("r3") == {"ok": False, "error": "entry_current"}
+    assert reader.answer("r4") == {"ok": False, "error": "unknown_entry"}
+    assert reader.answer("r5") == {"ok": True}
+    assert [entry.id for entry in stage.playlist.entries()] == [
+        playing.id,
+        third.id,
+        second.id,
+    ]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"entry_id": None, "by": 1},
+        {"entry_id": 7, "by": 1},
+        {"by": 2},
+        {"by": 0},
+        {"by": True},
+        {"by": 1.0},
+        {"by": "1"},
+        {},
+    ],
+)
+def test_a_move_by_anything_but_one_place_is_invalid(reader, stage, fields) -> None:
+    first = stage.add(FIRST)
+    second = stage.add(SECOND)
+    third = stage.add(SECOND)
+    reader.send({"id": "r1", "op": "move", "entry_id": third.id, **fields})
+
+    reader.run()
+
+    assert reader.answer("r1") == {"ok": False, "error": "invalid_request"}
+    assert [entry.id for entry in stage.playlist.entries()] == [
+        first.id,
+        second.id,
+        third.id,
+    ]
+
+
+def test_an_old_move_expires_unapplied(reader, stage) -> None:
+    stage.add(FIRST)
+    second = stage.add(SECOND)
+    third = stage.add(SECOND)
+    reader.send(
+        {
+            "id": "r1",
+            "op": "move",
+            "entry_id": third.id,
+            "by": -1,
+            "at_ms": reader.store.now_ms - 15_001,
+        }
+    )
+
+    reader.run()
+
+    assert reader.answer("r1") == {"ok": False, "error": "expired"}
+    assert [entry.id for entry in stage.playlist.entries()][1:] == [
+        second.id,
+        third.id,
+    ]
 
 
 def test_a_search_answers_the_results(reader) -> None:

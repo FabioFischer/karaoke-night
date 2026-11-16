@@ -129,6 +129,23 @@ class Playlist:
                     return True
         return False
 
+    def move(self, entry_id: str, by: int, *, fixed: str | None = None) -> None:
+        """Swap the entry with its neighbour by places, -1 or 1.
+
+        Nothing changes when the entry is unknown, the neighbour is past an
+        end, or either of them is fixed.
+        """
+        with self._lock:
+            ids = [entry.id for entry in self._entries]
+            if entry_id not in ids:
+                return
+            here = ids.index(entry_id)
+            there = here + by
+            if not 0 <= there < len(ids) or fixed in (ids[here], ids[there]):
+                return
+            entries = self._entries
+            entries[here], entries[there] = entries[there], entries[here]
+
     def entries(self) -> list[Entry]:
         with self._lock:
             return [replace(entry) for entry in self._entries]

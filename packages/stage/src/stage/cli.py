@@ -17,7 +17,7 @@ from stage.player import Player, ReaperError, ReaperPlayer
 from stage.playlist import Playlist
 from stage.public import Publisher, RequestReader, StoreClock
 from stage.server import create_app
-from stage.session import Session
+from stage.session import Session, SessionError
 from stage.store import Store
 from stage.sync import Outcome, sync
 
@@ -355,6 +355,15 @@ def serve(args: argparse.Namespace, http: httpx2.Client | None) -> int:
     player = ReaperPlayer(http=http, ack_timeout_s=ACK_TIMEOUT_S)
     playlist = Playlist(args.library, studio)
     session = Session(playlist, args.library, player)
+    try:
+        session.read_volumes()
+    except SessionError as error:
+        # REAPER may still be opening: the night script starts both at once.
+        print(
+            f"stage serve: could not read the volumes from REAPER ({error.detail}); "
+            "they are read again when a song starts",
+            file=sys.stderr,
+        )
     public = []
     if store is not None:
         # The session times its positions on the store clock's local clock.

@@ -15,7 +15,7 @@ from core.manifest import Manifest
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, StrictInt, ValidationError
 from starlette.exceptions import HTTPException
 
 from stage import library as lib
@@ -31,6 +31,7 @@ STATUS = {
     "not_ready": 409,
     "wrong_state": 409,
     "entry_playing": 409,
+    "entry_current": 409,
     "not_addable": 422,
     "invalid_request": 422,
     "reaper_unreachable": 502,
@@ -57,6 +58,19 @@ class AddRequest(BaseModel):
 class Settings(BaseModel):
     muted: list[str]
     key: int
+
+
+class VolumesRequest(BaseModel):
+    """Any number, as the contract says; the screen keeps the range."""
+
+    music_db: float
+    voice_db: float
+
+
+class MoveRequest(BaseModel):
+    """by is -1 or 1, which the session checks: a Literal takes true as 1."""
+
+    by: StrictInt
 
 
 def refusal(code: str, detail: str) -> JSONResponse:
@@ -186,9 +200,19 @@ def create_app(
     def remove_entry(entry_id: str) -> None:
         session.remove(entry_id)
 
+    @app.post("/api/playlist/{entry_id}/move")
+    def move_entry(entry_id: str, request: MoveRequest) -> dict:
+        session.move(entry_id, request.by)
+        return state()
+
     @app.put("/api/session/settings")
     def configure(settings: Settings) -> dict:
         session.configure(settings.muted, settings.key)
+        return state()
+
+    @app.put("/api/session/volumes")
+    def set_volumes(volumes: VolumesRequest) -> dict:
+        session.set_volumes(volumes.music_db, volumes.voice_db)
         return state()
 
     actions = {
@@ -197,6 +221,8 @@ def create_app(
         "play_next": session.play_next,
         "setup_next": session.setup_next,
         "skip": session.skip,
+        "pause": session.pause,
+        "resume": session.resume,
     }
     for name, action in actions.items():
         app.add_api_route(f"/api/session/{name}", _run(action, state), methods=["POST"])

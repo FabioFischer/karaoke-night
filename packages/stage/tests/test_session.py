@@ -4,10 +4,10 @@ import threading
 import time
 
 import pytest
-from stage.player import ListenerSilent, ReaperError, ReaperUnreachable
+from stage.player import ListenerSilent, ReaperError, ReaperPlayer, ReaperUnreachable
 from stage.playlist import Playlist
 from stage.search import Result
-from stage.session import Session, SessionError
+from stage.session import Session, SessionError, Volumes
 
 FIRST = "first-song--artist-name--a1b2c3"
 SECOND = "second-song--artist-name--d4e5f6"
@@ -79,9 +79,15 @@ def test_start_loads_sets_every_stem_transposes_then_plays(
 
     manifest = (packages.path / FIRST / "manifest.json").resolve()
     assert player.calls[0] == ("load", manifest)
-    assert player.names()[1:] == ["set_mute"] * 7 + ["transpose", "play"]
+    # The volumes are still unknown, so they are read once the song plays.
+    assert player.names()[1:] == ["set_mute"] * 7 + [
+        "transpose",
+        "play",
+        "volume_db",
+        "volume_db",
+    ]
     assert mutes(player) == {stem: stem in ("lead", "backing") for stem in STEMS}
-    assert player.calls[-2] == ("transpose", -2)
+    assert player.calls[8] == ("transpose", -2)
     view = session.view()
     assert (view.state, view.entry_id, view.position_s, view.duration_s) == (
         "playing",
@@ -506,3 +512,467 @@ def test_positions_are_timed_with_the_finest_clock() -> None:
     default = inspect.signature(Session).parameters["clock"].default
 
     assert default is time.perf_counter
+
+
+# Pause.
+
+
+def test_pause_pauses_reaper_and_the_song_keeps_playing(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+
+    session.pause()
+
+    assert player.names()[-4:] == ["pause", "position", "ended", "paused"]
+    view = session.view()
+    assert (view.state, view.paused) == ("playing", True)
+
+
+def test_pause_shows_paused_and_where_it_paused_at_once(
+    session, playlist, player
+) -> None:
+    """The publisher reads the view without the lock: a paused view with the
+    position of the last poll would go out as the phone's held position."""
+    playlist.add(library_song(FIRST))
+    player.positions = [5.0, 5.4]
+    session.start()
+    session.poll()
+    seen = []
+
+    def look(name: str) -> None:
+        if name in ("position", "ended", "paused"):
+            view = session.view()
+            seen.append((view.paused, view.position_s))
+
+    player.on_call = look
+
+    session.pause()
+
+    assert seen == [(False, 5.0)] * 3
+    assert (session.view().paused, session.view().position_s) == (True, 5.4)
+
+
+def test_a_pause_made_in_reaper_shows_on_the_next_poll(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+    player.reaper_paused = True
+
+    session.poll()
+
+    assert session.view().paused is True
+    refused(session.pause, "wrong_state")
+    session.resume()
+    assert player.names().count("resume") == 1
+    assert session.view().paused is False
+
+
+def test_a_resume_made_in_reaper_shows_on_the_next_poll(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+    session.pause()
+    player.reaper_paused = False
+
+    session.poll()
+
+    assert session.view().paused is False
+    refused(session.resume, "wrong_state")
+    session.pause()
+    assert player.names().count("pause") == 2
+    assert session.view().paused is True
+
+
+def test_pause_reads_where_reaper_paused(playlist, packages, player) -> None:
+    session = Session(
+        playlist,
+        packages.path,
+        player,
+        follow=False,
+        clock=ticking(10.0, 20.0, 20.4, 21.0, 21.2),
+    )
+    playlist.add(library_song(FIRST))
+    player.positions = [9.5, 10.3]
+    session.start()
+    session.poll()
+
+    session.pause()
+
+    view = session.view()
+    assert (view.paused, view.position_s) == (True, 10.3)
+    assert view.position_at_s == pytest.approx(21.1)
+
+
+def test_a_new_session_is_not_paused(session) -> None:
+    assert session.view().paused is False
+
+
+def test_pause_only_while_playing_and_not_paused(session, playlist, player) -> None:
+    playlist.add(library_song(FIRST))
+    refused(session.pause, "wrong_state")
+    session.start()
+    session.pause()
+
+    refused(session.pause, "wrong_state")
+    session.stop()
+    refused(session.pause, "wrong_state")
+
+    assert player.names().count("pause") == 1
+
+
+def test_resume_plays_on_and_never_from_the_start(playlist, packages, player) -> None:
+    session = Session(
+        playlist,
+        packages.path,
+        player,
+        follow=False,
+        clock=ticking(10.0, 20.0, 20.4, 25.0, 25.2, 31.0),
+    )
+    playlist.add(library_song(FIRST))
+    player.positions = [9.5]
+    session.start()
+    session.poll()
+    session.pause()
+    calls = len(player.calls)
+
+    session.resume()
+
+    assert player.names()[calls:] == ["resume"]
+    view = session.view()
+    assert (view.state, view.paused, view.position_s) == ("playing", False, 9.5)
+    # Playback goes on from position_s when REAPER's resume returned.
+    assert view.position_at_s == 31.0
+
+
+def test_resume_only_while_paused(session, playlist, player) -> None:
+    playlist.add(library_song(FIRST))
+    refused(session.resume, "wrong_state")
+    session.start()
+
+    refused(session.resume, "wrong_state")
+
+    assert "resume" not in player.names()
+
+
+def test_polls_go_on_during_a_pause_without_ending_the_song(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    player.positions = [3.0, 3.0, 3.0]
+    session.start()
+    session.pause()
+
+    session.poll()
+    session.poll()
+
+    view = session.view()
+    assert (view.state, view.paused, view.position_s) == ("playing", True, 3.0)
+    # One read when it paused, then the two polls.
+    assert player.names().count("position") == 3
+
+
+def test_stop_while_paused_shows_the_results(session, playlist, player) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+    session.pause()
+
+    session.stop()
+
+    assert player.calls[-1] == ("stop",)
+    view = session.view()
+    assert (view.state, view.paused) == ("results", False)
+
+
+def test_a_song_ended_during_a_pause_shows_the_results(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    # The read of pause, then a poll that sees the song ended (a stop by hand).
+    player.positions = [30.0, 30.0]
+    player.end = True
+    session.start()
+    session.pause()
+    assert (session.view().state, session.view().paused) == ("playing", True)
+
+    session.poll()
+
+    view = session.view()
+    assert (view.state, view.paused) == ("results", False)
+
+
+def test_a_reaper_error_on_pause_or_resume_changes_nothing(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    session.start()
+    player.failures["pause"] = ReaperUnreachable("could not reach REAPER")
+
+    refused(session.pause, "reaper_unreachable")
+    assert (session.view().paused, session.view().error) == (
+        False,
+        "reaper_unreachable",
+    )
+    del player.failures["pause"]
+    session.pause()
+    player.failures["resume"] = ListenerSilent("the listener did not answer")
+    refused(session.resume, "listener_silent")
+
+    assert session.view().paused is True
+
+
+def test_the_next_song_starts_unpaused(session, playlist, player) -> None:
+    playlist.add(library_song(FIRST))
+    playlist.add(library_song(SECOND))
+    session.start()
+    session.pause()
+    session.stop()
+
+    session.play_next()
+
+    assert session.view().paused is False
+
+
+def test_a_pause_on_reaper_is_not_an_end_of_song(playlist, packages, reaper) -> None:
+    reaper.tracks = ["Mic 1", "Mic 2", "Music", *(stem.title() for stem in STEMS)]
+    # The reads of poll, pause (its playstate, then where it paused), poll,
+    # poll, resume and poll.
+    reaper.transport = [
+        (1, 1.0),
+        (1, 1.1),
+        (2, 1.1),
+        (2, 1.1),
+        (2, 1.1),
+        (2, 1.1),
+        (1, 1.3),
+    ]
+    session = Session(
+        playlist,
+        packages.path,
+        ReaperPlayer(http=reaper.http(), poll_s=0),
+        follow=False,
+    )
+    playlist.add(library_song(FIRST))
+    session.start()
+    session.poll()
+
+    session.pause()
+    session.poll()
+    session.poll()
+    paused = session.view()
+    session.resume()
+    session.poll()
+
+    assert (paused.state, paused.paused, paused.position_s) == ("playing", True, 1.1)
+    view = session.view()
+    assert (view.state, view.paused, view.position_s) == ("playing", False, 1.3)
+    after_play = reaper.commands[reaper.commands.index("1007") + 1 :]
+    assert after_play.count("1008") == 2
+    assert "40042" not in after_play
+    assert "1007" not in after_play
+
+
+# Volumes.
+
+
+def test_volumes_are_unknown_until_read(session) -> None:
+    assert session.view().volumes is None
+
+
+def test_read_volumes_reads_the_music_folder_and_the_first_mic(session, player) -> None:
+    player.volumes_db = {"Music": -8.0, "Mic 1": -2.5, "Mic 2": 0.0}
+
+    session.read_volumes()
+
+    assert player.calls == [("volume_db", "Music"), ("volume_db", "Mic 1")]
+    assert session.view().volumes == Volumes(music_db=-8.0, voice_db=-2.5)
+
+
+def test_a_failed_read_of_the_volumes_leaves_them_unknown(session, player) -> None:
+    player.failures["volume_db"] = ReaperUnreachable("could not reach REAPER")
+
+    refused(session.read_volumes, "reaper_unreachable")
+
+    view = session.view()
+    assert (view.volumes, view.error) == (None, None)
+
+
+def test_start_reads_the_volumes_only_while_unknown(session, playlist, player) -> None:
+    playlist.add(library_song(FIRST))
+    playlist.add(library_song(SECOND))
+    session.start()
+    assert session.view().volumes == Volumes(music_db=-8.0, voice_db=0.0)
+    session.stop()
+    player.calls.clear()
+
+    session.play_next()
+
+    assert "volume_db" not in player.names()
+
+
+def test_a_failed_read_of_the_volumes_does_not_fail_the_start(
+    session, playlist, player
+) -> None:
+    playlist.add(library_song(FIRST))
+    player.failures["volume_db"] = ReaperError("REAPER has no track named 'Music'")
+
+    session.start()
+
+    view = session.view()
+    assert (view.state, view.volumes, view.error) == ("playing", None, None)
+
+
+def test_set_volumes_sets_the_music_and_both_mics(session, player) -> None:
+    session.set_volumes(-12.0, 3.5)
+
+    assert player.calls == [
+        ("set_volume_db", "Music", -12.0),
+        ("set_volume_db", "Mic 1", 3.5),
+        ("set_volume_db", "Mic 2", 3.5),
+    ]
+    assert session.view().volumes == Volumes(music_db=-12.0, voice_db=3.5)
+
+
+def test_volumes_are_set_in_any_state(session, playlist) -> None:
+    playlist.add(library_song(FIRST))
+    session.set_volumes(-1.0, -1.0)
+    session.start()
+    session.set_volumes(-2.0, -2.0)
+    session.pause()
+    session.set_volumes(-3.0, -3.0)
+    session.stop()
+
+    session.set_volumes(-4.0, -4.0)
+
+    assert session.view().volumes == Volumes(music_db=-4.0, voice_db=-4.0)
+
+
+def test_a_reaper_error_on_set_volumes_keeps_the_volumes_shown(session, player) -> None:
+    session.set_volumes(-6.0, 0.0)
+    player.failures["set_volume_db"] = ListenerSilent("the listener did not answer")
+
+    refused(lambda: session.set_volumes(-1.0, -1.0), "listener_silent")
+
+    view = session.view()
+    assert (view.volumes, view.error) == (
+        Volumes(music_db=-6.0, voice_db=0.0),
+        "listener_silent",
+    )
+    del player.failures["set_volume_db"]
+    session.set_volumes(-1.0, -1.0)
+    assert session.view().error is None
+
+
+def test_volumes_belong_to_the_night_not_to_a_song(session, playlist) -> None:
+    for _ in range(4):
+        playlist.add(library_song(FIRST))
+    session.set_volumes(-5.0, 2.0)
+    kept = Volumes(music_db=-5.0, voice_db=2.0)
+
+    session.skip()
+    assert session.view().volumes == kept
+    session.start()
+    assert session.view().volumes == kept
+    session.stop()
+    session.play_next()
+    assert session.view().volumes == kept
+    session.stop()
+    session.setup_next()
+    assert session.view().volumes == kept
+
+
+# Reordering.
+
+
+def ids(playlist) -> list[str]:
+    return [entry.id for entry in playlist.entries()]
+
+
+def test_move_shifts_an_entry_one_place(session, playlist) -> None:
+    first, second, third = (playlist.add(library_song(FIRST)) for _ in range(3))
+
+    session.move(third.id, -1)
+    assert ids(playlist) == [first.id, third.id, second.id]
+    session.move(third.id, 1)
+    assert ids(playlist) == [first.id, second.id, third.id]
+
+
+def test_the_first_entry_never_moves_in_setup(session, playlist) -> None:
+    first, second, third = (playlist.add(library_song(FIRST)) for _ in range(3))
+
+    refused(lambda: session.move(first.id, 1), "entry_current")
+    refused(lambda: session.move(first.id, -1), "entry_current")
+    session.move(second.id, -1)
+
+    assert ids(playlist) == [first.id, second.id, third.id]
+
+
+@pytest.mark.parametrize("finished", [False, True])
+def test_the_song_played_never_moves(session, playlist, finished) -> None:
+    played, second, third = (playlist.add(library_song(FIRST)) for _ in range(3))
+    session.start()
+    if finished:
+        session.stop()
+
+    refused(lambda: session.move(played.id, 1), "entry_current")
+    session.move(second.id, -1)
+    session.move(second.id, 1)
+
+    assert ids(playlist) == [played.id, third.id, second.id]
+
+
+def test_moving_the_last_entry_down_changes_nothing(session, playlist) -> None:
+    first, second, third = (playlist.add(library_song(FIRST)) for _ in range(3))
+
+    session.move(third.id, 1)
+
+    assert ids(playlist) == [first.id, second.id, third.id]
+
+
+def test_move_of_an_unknown_entry_is_refused(session, playlist) -> None:
+    playlist.add(library_song(FIRST))
+
+    refused(lambda: session.move("unknown", 1), "unknown_entry")
+
+
+def test_a_late_move_of_the_song_played_and_removed_is_an_unknown_entry(
+    session, playlist
+) -> None:
+    played = playlist.add(library_song(FIRST))
+    following = playlist.add(library_song(SECOND))
+    session.start()
+    session.stop()
+    session.remove(played.id)
+
+    # Still the session's own entry, but no longer in the playlist.
+    assert session.view().entry_id == played.id
+    refused(lambda: session.move(played.id, 1), "unknown_entry")
+    assert ids(playlist) == [following.id]
+
+
+@pytest.mark.parametrize("by", [0, 2, -2, True, 1.0])
+def test_move_takes_only_one_place_up_or_down(session, playlist, by) -> None:
+    first, second, third = (playlist.add(library_song(FIRST)) for _ in range(3))
+
+    refused(lambda: session.move(third.id, by), "invalid_request")
+
+    assert ids(playlist) == [first.id, second.id, third.id]
+
+
+def test_moves_never_overlap_a_player_call(playlist, packages, player) -> None:
+    """A move waits for the REAPER lock, as a remove does, and takes no other."""
+    session = Session(playlist, packages.path, player, poll_s=0.001)
+    entries = [playlist.add(library_song(FIRST)) for _ in range(4)]
+    player.delay_s = 0.002
+    session.start()
+
+    for _ in range(20):
+        session.move(entries[2].id, -1)
+        session.move(entries[2].id, 1)
+    session.close()
+
+    assert ids(playlist) == [entry.id for entry in entries]
+    assert player.overlaps == 0

@@ -507,6 +507,37 @@ def test_entries_keep_their_order_and_can_be_removed(local_library) -> None:
     assert len({first.id, second.id, third.id}) == 3
 
 
+@pytest.mark.parametrize(
+    ("moved", "by", "fixed", "order"),
+    [
+        (1, -1, None, [1, 0, 2]),
+        (1, 1, None, [0, 2, 1]),
+        (0, -1, None, [0, 1, 2]),
+        (2, 1, None, [0, 1, 2]),
+        (1, -1, 0, [0, 1, 2]),
+        (2, -1, 0, [0, 2, 1]),
+        (0, 1, 0, [0, 1, 2]),
+        (9, 1, None, [0, 1, 2]),
+    ],
+)
+def test_move_shifts_one_place_never_past_an_end_or_the_fixed_entry(
+    local_library, moved, by, fixed, order
+) -> None:
+    local_library.add(SONG, "Song Title", "Artist Name")
+    playlist = Playlist(local_library.path, None)
+    library_song = Result(
+        title="Song Title", artist="A", origin="library", song_id=SONG
+    )
+    entries = [playlist.add(library_song) for _ in range(3)]
+    entry_id = entries[moved].id if moved < len(entries) else "unknown"
+
+    playlist.move(entry_id, by, fixed=None if fixed is None else entries[fixed].id)
+
+    assert [entry.id for entry in playlist.entries()] == [
+        entries[index].id for index in order
+    ]
+
+
 def test_the_worker_thread_drives_the_jobs(studio, library: Path, scripted) -> None:
     studio.add(SONG)
     fake = scripted(job("downloading"), job("done"))

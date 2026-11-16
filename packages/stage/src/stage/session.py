@@ -3,12 +3,15 @@
 setup (stems to mute, key) -> playing -> results, then the next song either
 at once or through its setup. A song ends when REAPER stops on its own
 (player.ended(), section 5.4); a stop the Stage asks for is not an end, so
-the session itself moves to the results.
+the session itself moves to the results. A pause keeps the session playing.
 
 The REAPER listener has single slot cmd and ack, so every Player call goes
-through one lock: actions and the position polls never overlap.
+through one lock: actions and the position polls never overlap. Removing and
+moving entries take it too, so the session's own entry cannot change under
+them; the playlist's lock is only ever taken inside it, never around it.
 """
 
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -20,8 +23,14 @@ from stage import library as lib
 from stage.player import ListenerSilent, Player, ReaperError, ReaperUnreachable
 from stage.playlist import Entry, Playlist
 
+log = logging.getLogger(__name__)
+
 POLL_S = 0.25
 DEFAULT_MUTED = ("lead",)
+# The template's tracks (docs/PLAN.md section 5.4): the folder of every stem,
+# and the mics, which the voice volume sets together.
+MUSIC_TRACK = "Music"
+VOICE_TRACKS = ("Mic 1", "Mic 2")
 
 SessionState = Literal["setup", "playing", "results"]
 
@@ -36,13 +45,23 @@ class SessionError(Exception):
 
 
 @dataclass(frozen=True)
+class Volumes:
+    """The night's volumes in dB: the Music folder, and the mics together."""
+
+    music_db: float
+    voice_db: float
+
+
+@dataclass(frozen=True)
 class SessionView:
     """What the screen shows of the session.
 
     entry_id is the song of the session: the first entry in setup, the one
-    played in playing and results. position_at_s is when REAPER reported
-    position_s, in the session's clock (time.perf_counter). error and detail are
-    the last failure, cleared by the next action or poll that works.
+    played in playing and results. paused is only ever true while playing.
+    volumes is None until read from REAPER or set. position_at_s is when
+    REAPER reported position_s, in the session's clock (time.perf_counter);
+    on a resume, when REAPER's resume returned. error and detail are the last
+    failure, cleared by the next action or poll that works.
     """
 
     state: SessionState
@@ -53,6 +72,8 @@ class SessionView:
     duration_s: float | None
     error: str | None
     detail: str | None
+    paused: bool = False
+    volumes: Volumes | None = None
     position_at_s: float | None = None
 
 
@@ -95,6 +116,8 @@ class Session:
         self._duration_s: float | None = None
         self._error: str | None = None
         self._detail: str | None = None
+        self._paused = False
+        self._volumes: Volumes | None = None
         # A new song or close() ends the follower of the previous one.
         self._generation = 0
 
@@ -114,6 +137,8 @@ class Session:
                 duration_s,
                 self._error,
                 self._detail,
+                self._paused,
+                self._volumes,
                 self._position_at_s,
             )
 
@@ -136,9 +161,63 @@ class Session:
             try:
                 self._player.stop()
             except ReaperError as error:
-                self._set(state="results")
+                self._set(state="results", paused=False)
                 self._raise(error)
-            self._set(state="results", error=None, detail=None)
+            self._set(state="results", paused=False, error=None, detail=None)
+
+    def pause(self) -> None:
+        """Pause REAPER, then read it at once.
+
+        The read shows paused and where REAPER paused in one change, since the
+        phone holds that position while paused. When it fails, the error shows
+        and the next poll reads the pause.
+        """
+        with self._lock:
+            self._require("playing")
+            if self._paused:
+                raise SessionError("wrong_state", "the song is paused already")
+            try:
+                self._player.pause()
+            except ReaperError as error:
+                self._raise(error)
+            self._poll(self._generation)
+
+    def resume(self) -> None:
+        """Play on from where the song paused.
+
+        REAPER plays on from position_s, the last read, as of when its resume
+        returned: the polls keep reading through a pause.
+        """
+        with self._lock:
+            self._require("playing")
+            if not self._paused:
+                raise SessionError("wrong_state", "the song is not paused")
+            try:
+                self._player.resume()
+            except ReaperError as error:
+                self._raise(error)
+            self._set(
+                paused=False, position_at_s=self._clock(), error=None, detail=None
+            )
+
+    def read_volumes(self) -> None:
+        """Read the volumes from REAPER. A failure is raised, not shown."""
+        with self._lock:
+            try:
+                self._read_volumes()
+            except ReaperError as error:
+                raise SessionError(reaper_code(error), str(error)) from None
+
+    def set_volumes(self, music_db: float, voice_db: float) -> None:
+        """In any state. On a REAPER error the volumes shown stay as they were."""
+        with self._lock:
+            try:
+                self._player.set_volume_db(MUSIC_TRACK, music_db)
+                for track in VOICE_TRACKS:
+                    self._player.set_volume_db(track, voice_db)
+            except ReaperError as error:
+                self._raise(error)
+            self._set(volumes=Volumes(music_db, voice_db), error=None, detail=None)
 
     def play_next(self) -> None:
         """Remove the song played and play the next with its mutes, at key 0.
@@ -188,6 +267,23 @@ class Session:
             if not self._playlist.remove(entry_id):
                 raise SessionError("unknown_entry", f"no entry {entry_id}")
 
+    def move(self, entry_id: str, by: int) -> None:
+        """Shift an entry one place up (-1) or down (1) behind the session's own
+        entry, which never moves. A move past either end changes nothing.
+        """
+        # bool is an int, and True == 1.
+        if type(by) is not int or by not in (-1, 1):
+            raise SessionError("invalid_request", f"by must be -1 or 1, not {by!r}")
+        with self._lock:
+            if self._playlist.get(entry_id) is None:
+                raise SessionError("unknown_entry", f"no entry {entry_id}")
+            own = self.view().entry_id
+            if entry_id == own:
+                raise SessionError(
+                    "entry_current", "the entry of the session cannot move"
+                )
+            self._playlist.move(entry_id, by, fixed=own)
+
     def poll(self) -> None:
         """Read the position once; moves to the results when the song ended."""
         with self._lock:
@@ -227,9 +323,16 @@ class Session:
             position_s=0.0,
             position_at_s=self._clock(),
             duration_s=song.manifest.duration_s,
+            paused=False,
             error=None,
             detail=None,
         )
+        if self._volumes is None:
+            # REAPER may not have answered when stage serve started.
+            try:
+                self._read_volumes()
+            except ReaperError as error:
+                log.warning("could not read the volumes from REAPER: %s", error)
         if self._follow:
             threading.Thread(
                 target=self._follow_song,
@@ -246,7 +349,10 @@ class Session:
                     return
 
     def _poll(self, generation: int) -> bool:
-        """Whether the song of generation still plays. The caller holds _lock."""
+        """Whether the song of generation still plays. The caller holds _lock.
+
+        paused follows REAPER, so a pause or a resume made in REAPER shows too.
+        """
         if generation != self._generation or self._state != "playing":
             return False
         try:
@@ -255,6 +361,7 @@ class Session:
             # REAPER read the position somewhere within the request.
             position_at_s = (asked + self._clock()) / 2
             ended = self._player.ended()
+            paused = self._player.paused()
         except ReaperError as error:
             self._set(error=reaper_code(error), detail=str(error))
             return True
@@ -263,14 +370,26 @@ class Session:
                 state="results",
                 position_s=position,
                 position_at_s=position_at_s,
+                paused=False,
                 error=None,
                 detail=None,
             )
             return False
         self._set(
-            position_s=position, position_at_s=position_at_s, error=None, detail=None
+            position_s=position,
+            position_at_s=position_at_s,
+            paused=paused,
+            error=None,
+            detail=None,
         )
         return True
+
+    def _read_volumes(self) -> None:
+        volumes = Volumes(
+            self._player.volume_db(MUSIC_TRACK),
+            self._player.volume_db(VOICE_TRACKS[0]),
+        )
+        self._set(volumes=volumes)
 
     def _following(self) -> Entry | None:
         for entry in self._playlist.entries():

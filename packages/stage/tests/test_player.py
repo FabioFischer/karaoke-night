@@ -29,7 +29,7 @@ TRACK_REPLY = (
     "TRACK\t3\tdrums\t0\t1.000000\t0.000000\t-1500\t-1500\t1.000000\t0\t0\t0\t1\t0\n"
 )
 PLAYING, PAUSED, STOPPED = 1, 2, 0
-RECORD_PAUSED = 6
+RECORDING, RECORD_PAUSED = 5, 6
 MANIFEST = Path("C:/Songs/a;b/song a/manifest.json")
 
 
@@ -48,11 +48,17 @@ def connected(reaper, **options) -> ReaperPlayer:
 
 def test_parse_tracks_reads_every_track_line() -> None:
     assert parse_tracks(TRACK_REPLY) == [
-        Track(0, "MASTER"),
-        Track(1, "Mic 1"),
-        Track(2, "Lead"),
-        Track(3, "drums"),
+        Track(0, "MASTER", 1.0),
+        Track(1, "Mic 1", 1.0),
+        Track(2, "Lead", 1.0),
+        Track(3, "drums", 1.0),
     ]
+
+
+def test_parse_tracks_reads_the_volume_as_a_gain() -> None:
+    reply = "TRACK\t1\tMusic\t1\t0.398107\t0.000000\t-1500\t-1500\t1\t0\t0\t0\t1\t0\n"
+
+    assert parse_tracks(reply) == [Track(1, "Music", 0.398107)]
 
 
 def test_parse_tracks_ignores_other_lines() -> None:
@@ -443,6 +449,165 @@ def test_play_again_forgets_the_transport_of_the_previous_song(reaper) -> None:
     player.position()
 
     assert not player.ended()
+
+
+@pytest.mark.parametrize("moving", [PLAYING, RECORDING])
+def test_pause_sends_the_pause_action_while_playback_moves(reaper, moving) -> None:
+    reaper.transport = [(moving, 30.0)]
+    player = connected(reaper)
+
+    player.pause()
+
+    assert reaper.commands[1:] == ["TRANSPORT", "1008"]
+
+
+@pytest.mark.parametrize("still", [PAUSED, RECORD_PAUSED, STOPPED])
+def test_pause_never_resumes_or_starts_playback(reaper, still) -> None:
+    # 1008 toggles: sent while paused it would resume, while stopped it
+    # would start a paused playback.
+    reaper.transport = [(still, 30.0)]
+    player = connected(reaper)
+
+    player.pause()
+
+    assert reaper.commands[1:] == ["TRANSPORT"]
+
+
+@pytest.mark.parametrize("paused", [PAUSED, RECORD_PAUSED])
+def test_resume_sends_the_pause_action_while_paused(reaper, paused) -> None:
+    reaper.transport = [(paused, 30.0)]
+    player = connected(reaper)
+
+    player.resume()
+
+    assert reaper.commands[1:] == ["TRANSPORT", "1008"]
+
+
+@pytest.mark.parametrize("not_paused", [PLAYING, RECORDING, STOPPED])
+def test_resume_never_pauses_or_goes_to_the_start(reaper, not_paused) -> None:
+    reaper.transport = [(not_paused, 30.0)]
+    player = connected(reaper)
+
+    player.resume()
+
+    assert reaper.commands[1:] == ["TRANSPORT"]
+
+
+def test_a_pause_and_a_resume_are_not_an_end_of_song(reaper) -> None:
+    # The reads of position(), pause(), position(), resume(), position().
+    reaper.transport = [
+        (PLAYING, 0.5),
+        (PLAYING, 1.0),
+        (PAUSED, 1.0),
+        (PAUSED, 1.0),
+        (PLAYING, 1.1),
+    ]
+    player = connected(reaper)
+    player.play()
+    player.position()
+
+    seen = []
+    player.pause()
+    player.position()
+    seen.append(player.ended())
+    player.resume()
+    player.position()
+    seen.append(player.ended())
+
+    assert seen == [False, False]
+    assert reaper.commands[3:] == [
+        "TRANSPORT",
+        "TRANSPORT",
+        "1008",
+        "TRANSPORT",
+        "TRANSPORT",
+        "1008",
+        "TRANSPORT",
+    ]
+
+
+def test_a_stop_by_hand_during_a_pause_still_ends_the_song(reaper) -> None:
+    reaper.transport = [(PLAYING, 1.0), (PAUSED, 1.0), (STOPPED, 1.0)]
+    player = connected(reaper)
+    player.play()
+    player.position()
+    player.pause()
+
+    player.position()
+
+    assert player.ended()
+
+
+@pytest.mark.parametrize(
+    ("db", "gain"),
+    [(0.0, "1.000000"), (-8.0, "0.398107"), (6.0, "1.995262"), (-30.0, "0.031623")],
+)
+def test_set_volume_sends_the_absolute_gain_of_the_db(reaper, db, gain) -> None:
+    reaper.tracks = ["Mic 1", "Mic 2", "Music"]
+    player = connected(reaper)
+
+    player.set_volume_db("music", db)
+
+    assert reaper.commands[1:] == [f"SET/TRACK/3/VOL/{gain}"]
+
+
+def test_a_volume_far_below_is_never_a_relative_or_exponent_value(reaper) -> None:
+    # A value starting with + or - is relative in dB, and an e ends the
+    # touch state; 1e-08 would carry both meanings.
+    reaper.tracks = ["Music"]
+    player = connected(reaper)
+
+    player.set_volume_db("Music", -160.0)
+
+    assert reaper.commands[1:] == ["SET/TRACK/1/VOL/0.000000"]
+
+
+def test_set_volume_reads_the_tracks_again_when_it_does_not_know_the_track(
+    reaper,
+) -> None:
+    player = ReaperPlayer(http=reaper.http(), poll_s=0)
+    reaper.tracks = ["Mic 1", "Music"]
+
+    player.set_volume_db("Music", 0.0)
+
+    assert reaper.commands == ["TRACK", "SET/TRACK/2/VOL/1.000000"]
+
+
+def test_set_volume_of_a_missing_track_names_the_tracks(reaper) -> None:
+    reaper.tracks = ["Mic 1", "Lead"]
+    player = connected(reaper)
+
+    with pytest.raises(ReaperError) as error:
+        player.set_volume_db("Music", 0.0)
+
+    assert str(error.value) == (
+        "REAPER has no track named 'Music'; its tracks are: Mic 1, Lead"
+    )
+
+
+@pytest.mark.parametrize(
+    ("gain", "db"),
+    [(1.0, 0.0), (0.398107, -8.0), (1.995262, 6.0), (0.031623, -30.0), (0.0, -150.0)],
+)
+def test_volume_reads_the_gain_of_the_track_list_in_db(reaper, gain, db) -> None:
+    reaper.tracks = ["Mic 1", "Music"]
+    reaper.volumes = {2: gain}
+    player = ReaperPlayer(http=reaper.http(), poll_s=0)
+
+    assert player.volume_db("MUSIC") == db
+    assert reaper.commands == ["TRACK"]
+
+
+def test_volume_of_a_missing_track_names_the_tracks(reaper) -> None:
+    reaper.tracks = ["Mic 1"]
+    player = ReaperPlayer(http=reaper.http(), poll_s=0)
+
+    with pytest.raises(ReaperError) as error:
+        player.volume_db("Music")
+
+    assert (
+        str(error.value) == "REAPER has no track named 'Music'; its tracks are: Mic 1"
+    )
 
 
 def test_an_unreachable_reaper_says_where_it_was_looked_for() -> None:

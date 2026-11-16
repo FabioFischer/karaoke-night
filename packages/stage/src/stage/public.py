@@ -166,6 +166,7 @@ class Publisher:
         ):
             return
         anchor = None
+        # While paused the phone holds the anchor's position without advancing it.
         if view.state == "playing":
             anchor = {
                 "position_s": view.position_s,
@@ -196,6 +197,7 @@ class Publisher:
                 "state": view.state,
                 "entry_id": view.entry_id,
                 "duration_s": view.duration_s,
+                "paused": view.paused,
             },
             "playlist": playlist,
             "lyrics": self._lyrics_of(view) if view.state == "playing" else None,
@@ -357,7 +359,7 @@ class RequestReader:
         self._answer(request_id, answer)
 
     def _apply(self, request: dict) -> dict:
-        """The answer to an add or a remove, as the Stage API decides it."""
+        """The answer to an add, a remove or a move, as the Stage API decides it."""
         op = request.get("op")
         if op == "add":
             try:
@@ -373,6 +375,14 @@ class RequestReader:
             try:
                 self._session.remove(request["entry_id"])
             except SessionError as error:
+                return {"ok": False, "error": error.code}
+            return {"ok": True}
+        if op == "move" and isinstance(request.get("entry_id"), str):
+            try:
+                self._session.move(request["entry_id"], request.get("by"))
+            except SessionError as error:
+                if error.code == "invalid_request":
+                    return INVALID
                 return {"ok": False, "error": error.code}
             return {"ok": True}
         return INVALID

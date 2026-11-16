@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import shutil
 import threading
 import time
@@ -197,7 +198,7 @@ TEMPLATE_TRACKS = (
 )
 _CMD = "SET/EXTSTATE/karaoke/cmd/"
 _ACK = "GET/EXTSTATE/karaoke/ack"
-_TRACK_FIELDS = "1.000000\t0.000000\t-1500\t-1500\t1.000000\t0\t0\t0\t1\t0"
+_TRACK_FIELDS = "0.000000\t-1500\t-1500\t1.000000\t0\t0\t0\t1\t0"
 PLAYING, STOPPED = 1, 0
 # Far more reads than any test needs: a follow loop that never sees the end
 # fails here instead of hanging the suite.
@@ -219,11 +220,14 @@ class FakeReaper:
     (playstate, position) the TRANSPORT reads return, in order; the last one
     repeats. on_transport, when set, runs before each TRANSPORT reply with the
     number of reads so far. A read past MAX_TRANSPORT_READS fails the test.
+    volumes holds the gain of each track by index, 1.0 (0 dB) when missing;
+    SET/TRACK/i/VOL takes only an absolute gain written as a plain decimal.
     """
 
     def __init__(self, tracks: tuple[str, ...] = TEMPLATE_TRACKS) -> None:
         self.tracks = list(tracks)
         self.muted: dict[int, bool] = {}
+        self.volumes: dict[int, float] = {}
         self.commands: list[str] = []
         self.sent: list[dict] = []
         self.acks: Callable[[dict], list[str]] = lambda command: [
@@ -251,7 +255,7 @@ class FakeReaper:
             names = ["MASTER", *self.tracks]
             return "".join(
                 f"TRACK\t{index}\t{name}\t{8 if self.muted.get(index) else 0}"
-                f"\t{_TRACK_FIELDS}\n"
+                f"\t{self.volumes.get(index, 1.0):.6f}\t{_TRACK_FIELDS}\n"
                 for index, name in enumerate(names)
             )
         if command == "TRANSPORT":
@@ -268,6 +272,10 @@ class FakeReaper:
             return f"TRANSPORT\t{state}\t{position:.6f}\t0\t0:00.000\t1.1.00\n"
         if command.startswith("SET/TRACK/"):
             _, _, index, field, value = command.split("/")
+            if field == "VOL":
+                assert re.fullmatch(r"\d+\.\d+", value), command
+                self.volumes[int(index)] = float(value)
+                return ""
             assert field == "MUTE", command
             self.muted[int(index)] = value == "1"
             return ""
@@ -371,11 +379,13 @@ class FakePlayer:
     position() returns positions in order, the last one repeating; ended()
     turns true once positions are used up, when end is set. failures maps a
     method name to the exception it raises. Each call holds for delay_s, so
-    a call made while another runs shows up in overlaps.
+    a call made while another runs shows up in overlaps. volumes_db holds
+    the volume of each track by name, as the template's faders start.
     """
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.volumes_db: dict[str, float] = {"Music": -8.0, "Mic 1": 0.0, "Mic 2": 0.0}
         self.positions: list[float] = [0.0]
         self.end = False
         self.failures: dict[str, Exception] = {}
@@ -426,6 +436,20 @@ class FakePlayer:
     def ended(self) -> bool:
         self._call("ended")
         return self.end and self._reads >= len(self.positions)
+
+    def pause(self) -> None:
+        self._call("pause")
+
+    def resume(self) -> None:
+        self._call("resume")
+
+    def set_volume_db(self, track: str, db: float) -> None:
+        self._call("set_volume_db", track, db)
+        self.volumes_db[track] = db
+
+    def volume_db(self, track: str) -> float:
+        self._call("volume_db", track)
+        return self.volumes_db[track]
 
     def names(self) -> list[str]:
         return [call[0] for call in self.calls]

@@ -66,10 +66,134 @@ def test_state_of_a_new_stage(stage) -> None:
             "duration_s": None,
             "error": None,
             "detail": None,
+            "paused": False,
+            "volumes": None,
             "stems": [],
         },
         "playlist": [],
     }
+
+
+def test_pause_and_resume_answer_the_state(stage, player) -> None:
+    stage.add(FIRST)
+    stage.client.post("/api/session/start")
+
+    paused = stage.client.post("/api/session/pause")
+    again = stage.client.post("/api/session/pause")
+    resumed = stage.client.post("/api/session/resume")
+    not_paused = stage.client.post("/api/session/resume")
+
+    assert paused.status_code == 200
+    assert (paused.json()["session"]["state"], paused.json()["session"]["paused"]) == (
+        "playing",
+        True,
+    )
+    assert (again.status_code, again.json()["error"]) == (409, "wrong_state")
+    assert resumed.json()["session"]["paused"] is False
+    assert (not_paused.status_code, not_paused.json()["error"]) == (409, "wrong_state")
+    assert player.names().count("pause") == 1
+    assert player.names().count("resume") == 1
+    assert player.names().count("play") == 1
+
+
+def test_volumes_are_set_in_db_and_answer_the_state(stage, player) -> None:
+    response = stage.client.put(
+        "/api/session/volumes", json={"music_db": -12.5, "voice_db": 3}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session"]["volumes"] == {
+        "music_db": -12.5,
+        "voice_db": 3.0,
+    }
+    assert player.calls == [
+        ("set_volume_db", "Music", -12.5),
+        ("set_volume_db", "Mic 1", 3.0),
+        ("set_volume_db", "Mic 2", 3.0),
+    ]
+    state = stage.client.get("/api/state").json()["session"]
+    assert state["volumes"] == {"music_db": -12.5, "voice_db": 3.0}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"music_db": -3}',
+        '{"music_db": "loud", "voice_db": 0}',
+        '{"music_db": Infinity, "voice_db": 0}',
+        '{"music_db": 0, "voice_db": NaN}',
+    ],
+)
+def test_volumes_that_are_not_two_numbers_are_invalid(stage, player, body) -> None:
+    response = stage.client.put(
+        "/api/session/volumes",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+
+    assert (response.status_code, response.json()["error"]) == (422, "invalid_request")
+    assert player.calls == []
+
+
+def test_a_reaper_error_on_volumes_answers_502(stage, player) -> None:
+    player.failures["set_volume_db"] = ListenerSilent("the listener did not answer")
+
+    response = stage.client.put(
+        "/api/session/volumes", json={"music_db": 0, "voice_db": 0}
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": "listener_silent",
+        "detail": "the listener did not answer",
+    }
+
+
+def test_move_answers_the_state_with_the_new_order(stage) -> None:
+    first = stage.add(FIRST)
+    second = stage.add(SECOND)
+    third = stage.add(SECOND)
+
+    response = stage.client.post(f"/api/playlist/{third['id']}/move", json={"by": -1})
+
+    assert response.status_code == 200
+    assert [entry["id"] for entry in response.json()["playlist"]] == [
+        first["id"],
+        third["id"],
+        second["id"],
+    ]
+    assert response.json()["session"]["entry_id"] == first["id"]
+
+
+def test_move_refusals(stage) -> None:
+    first = stage.add(FIRST)
+    second = stage.add(SECOND)
+
+    current = stage.client.post(f"/api/playlist/{first['id']}/move", json={"by": 1})
+    unknown = stage.client.post("/api/playlist/unknown/move", json={"by": 1})
+    edge = stage.client.post(f"/api/playlist/{second['id']}/move", json={"by": -1})
+
+    assert (current.status_code, current.json()["error"]) == (409, "entry_current")
+    assert (unknown.status_code, unknown.json()["error"]) == (404, "unknown_entry")
+    assert edge.status_code == 200
+    assert [entry["id"] for entry in edge.json()["playlist"]] == [
+        first["id"],
+        second["id"],
+    ]
+
+
+@pytest.mark.parametrize("body", [{}, {"by": 2}, {"by": 0}, {"by": True}, {"by": "1"}])
+def test_a_move_by_anything_but_one_place_is_invalid(stage, body) -> None:
+    stage.add(FIRST)
+    second = stage.add(SECOND)
+    third = stage.add(SECOND)
+
+    response = stage.client.post(f"/api/playlist/{third['id']}/move", json=body)
+
+    assert (response.status_code, response.json()["error"]) == (422, "invalid_request")
+    assert [entry["id"] for entry in stage.client.get("/api/state").json()["playlist"]][
+        1:
+    ] == [second["id"], third["id"]]
 
 
 def test_state_lists_the_stems_of_the_song_of_the_session_in_setup(stage) -> None:

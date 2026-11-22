@@ -60,6 +60,13 @@ export const text = {
     playlist: 'Fila',
     skip: 'Pular para a próxima',
     volumes: 'Volume',
+    // The excerpt: a short part of the song, to try the key, the stems and the volumes.
+    preview: 'Ouvir um trecho',
+    previewAgain: 'Ouvir de novo',
+    previewStop: 'Parar o trecho',
+    previewStarting: 'Preparando o trecho...',
+    previewStopping: 'Parando o trecho...',
+    previewHint: 'Um pedaço da música para testar o tom, as vozes e o volume antes de cantar.',
   },
 
   volumes: {

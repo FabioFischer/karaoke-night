@@ -61,6 +61,8 @@ export interface Session {
   paused: boolean
   /** Null until the Stage read them from REAPER. */
   volumes: Volumes | null
+  /** Only in setup: an excerpt of the song plays, and position_s follows it. */
+  previewing: boolean
 }
 
 export interface StageState {
@@ -92,6 +94,8 @@ export type SessionAction =
   | 'play_next'
   | 'setup_next'
   | 'skip'
+  | 'preview'
+  | 'preview/stop'
 
 /** One place up (-1) or down (1) in the playlist. */
 export type MoveBy = -1 | 1

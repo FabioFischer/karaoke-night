@@ -223,6 +223,8 @@ def create_app(
         "skip": session.skip,
         "pause": session.pause,
         "resume": session.resume,
+        "preview": session.preview,
+        "preview/stop": session.preview_stop,
     }
     for name, action in actions.items():
         app.add_api_route(f"/api/session/{name}", _run(action, state), methods=["POST"])

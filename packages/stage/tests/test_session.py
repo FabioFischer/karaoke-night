@@ -1,4 +1,5 @@
 import inspect
+import json
 import shutil
 import threading
 import time
@@ -976,3 +977,440 @@ def test_moves_never_overlap_a_player_call(playlist, packages, player) -> None:
 
     assert ids(playlist) == [entry.id for entry in entries]
     assert player.overlaps == 0
+
+
+# The excerpt of the pre-performance.
+
+SYNCED = "synced-song--artist-name--0a1b2c"
+# A blank first stamp, as LRC files often open with, is no sung line.
+SYNCED_LYRICS = "[00:00.00]\r\n[00:12.50] Line one\r\n[00:15.00] Line two\r\n"
+# From 3 s before the first sung line, for 20 s.
+EXCERPT_START = 9.5
+EXCERPT_END = 29.5
+
+
+@pytest.fixture
+def excerpt(playlist, packages):
+    """The entry of the setup: a song whose first sung line is at 12.5 s."""
+    packages.add(SYNCED, duration_s=200.0, lyrics=SYNCED_LYRICS)
+    return playlist.add(library_song(SYNCED))
+
+
+def test_a_new_session_plays_no_excerpt(session) -> None:
+    view = session.view()
+
+    assert (view.previewing, view.position_s, view.position_at_s) == (
+        False,
+        None,
+        None,
+    )
+
+
+def test_preview_plays_the_song_from_3_s_before_its_first_sung_line(
+    session, excerpt, packages, player
+) -> None:
+    session.configure(["lead", "backing"], -2)
+
+    session.preview()
+
+    manifest = (packages.path / SYNCED / "manifest.json").resolve()
+    assert player.calls[0] == ("load", manifest)
+    # The volumes are still unknown, so they are read once the excerpt plays.
+    assert player.names()[1:] == ["set_mute"] * 7 + [
+        "transpose",
+        "play",
+        "seek",
+        "volume_db",
+        "volume_db",
+    ]
+    assert mutes(player) == {stem: stem in ("lead", "backing") for stem in STEMS}
+    assert ("transpose", -2) in player.calls
+    assert ("seek", EXCERPT_START) in player.calls
+    view = session.view()
+    assert (view.state, view.entry_id, view.previewing, view.position_s) == (
+        "setup",
+        excerpt.id,
+        True,
+        EXCERPT_START,
+    )
+    assert view.volumes == Volumes(music_db=-8.0, voice_db=0.0)
+
+
+def test_an_excerpt_never_starts_before_the_song(
+    session, playlist, packages, player
+) -> None:
+    packages.add(SYNCED, lyrics="[00:01.00] Line one\r\n")
+    playlist.add(library_song(SYNCED))
+
+    session.preview()
+
+    assert ("seek", 0.0) in player.calls
+
+
+@pytest.mark.parametrize("lyrics", ["none", "unsynced"])
+def test_an_excerpt_without_synced_lyrics_starts_at_0(
+    session, playlist, packages, player, lyrics
+) -> None:
+    packages.add(SYNCED, lyrics=SYNCED_LYRICS)
+    manifest_path = packages.path / SYNCED / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if lyrics == "none":
+        del manifest["lyrics"]
+    else:
+        manifest["lyrics"]["synced"] = False
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    playlist.add(library_song(SYNCED))
+
+    session.preview()
+
+    assert ("seek", 0.0) in player.calls
+    assert session.view().position_s == 0.0
+
+
+def test_preview_takes_the_time_of_its_start_after_the_seek(
+    playlist, packages, player, excerpt
+) -> None:
+    session = Session(
+        playlist, packages.path, player, follow=False, clock=ticking(10.0)
+    )
+
+    session.preview()
+
+    view = session.view()
+    assert (view.position_s, view.position_at_s) == (EXCERPT_START, 10.0)
+
+
+def test_preview_is_refused_as_start_is(session, playlist, player) -> None:
+    refused(session.preview, "no_song")
+    playlist.add(new_song())
+    refused(session.preview, "not_ready")
+    assert player.calls == []
+
+    session.skip()
+    playlist.add(library_song(FIRST))
+    session.start()
+
+    refused(session.preview, "wrong_state")
+    assert "seek" not in player.names()
+
+
+def test_the_excerpt_ends_20_s_after_its_start_and_stays_in_setup(
+    session, excerpt, player
+) -> None:
+    player.positions = [10.0, EXCERPT_END - 0.1, EXCERPT_END]
+    session.preview()
+
+    session.poll()
+    session.poll()
+    assert (session.view().previewing, "stop" in player.names()) == (True, False)
+    session.poll()
+
+    assert player.calls[-1] == ("stop",)
+    view = session.view()
+    assert (view.state, view.entry_id, view.previewing) == ("setup", excerpt.id, False)
+    assert (view.position_s, view.position_at_s) == (None, None)
+
+
+def test_an_excerpt_reaper_does_not_stop_at_its_end_still_ends(
+    session, excerpt, player
+) -> None:
+    player.positions = [EXCERPT_END]
+    session.preview()
+    player.failures["stop"] = ReaperUnreachable("could not reach REAPER")
+
+    session.poll()
+
+    view = session.view()
+    assert (view.state, view.previewing, view.error) == (
+        "setup",
+        False,
+        "reaper_unreachable",
+    )
+
+
+def test_the_polls_of_an_excerpt_follow_its_position(session, excerpt, player) -> None:
+    player.positions = [12.0]
+    session.preview()
+
+    session.poll()
+
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s) == ("setup", True, 12.0)
+
+
+def test_an_excerpt_reaper_ends_on_its_own_never_shows_the_results(
+    session, excerpt, player
+) -> None:
+    """A song shorter than the excerpt: REAPER stops at the end of the project."""
+    player.positions = [20.0]
+    player.end = True
+    session.preview()
+
+    session.poll()
+
+    assert "stop" not in player.names()
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s) == ("setup", False, None)
+
+
+def test_preview_again_plays_the_excerpt_from_its_start(
+    session, excerpt, player
+) -> None:
+    player.positions = [20.0]
+    session.preview()
+    session.poll()
+    player.calls.clear()
+
+    session.preview()
+
+    assert player.names() == ["load"] + ["set_mute"] * 7 + [
+        "transpose",
+        "play",
+        "seek",
+    ]
+    view = session.view()
+    assert (view.previewing, view.position_s) == (True, EXCERPT_START)
+
+
+def test_preview_stop_stops_reaper_and_ends_the_excerpt(
+    session, excerpt, player
+) -> None:
+    session.preview()
+
+    session.preview_stop()
+
+    assert player.calls[-1] == ("stop",)
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s) == ("setup", False, None)
+    refused(session.preview_stop, "wrong_state")
+    assert player.names().count("stop") == 1
+
+
+def test_preview_stop_only_during_an_excerpt(session, excerpt, player) -> None:
+    refused(session.preview_stop, "wrong_state")
+    session.start()
+
+    refused(session.preview_stop, "wrong_state")
+
+    assert "stop" not in player.names()
+
+
+def test_a_reaper_error_on_preview_stop_still_ends_the_excerpt(
+    session, excerpt, player
+) -> None:
+    session.preview()
+    player.failures["stop"] = ReaperUnreachable("could not reach REAPER")
+
+    refused(session.preview_stop, "reaper_unreachable")
+
+    view = session.view()
+    assert (view.previewing, view.error) == (False, "reaper_unreachable")
+
+
+def test_settings_during_an_excerpt_reach_reaper_at_once(
+    session, excerpt, player
+) -> None:
+    session.preview()
+    player.calls.clear()
+
+    session.configure(["drums"], 3)
+
+    assert player.names() == ["set_mute"] * 7 + ["transpose"]
+    assert mutes(player) == {stem: stem == "drums" for stem in STEMS}
+    assert player.calls[-1] == ("transpose", 3)
+    view = session.view()
+    assert (view.muted, view.key, view.previewing) == (("drums",), 3, True)
+
+
+def test_settings_outside_an_excerpt_reach_no_reaper(session, excerpt, player) -> None:
+    session.configure(["drums"], 3)
+    session.preview()
+    session.preview_stop()
+    player.calls.clear()
+
+    session.configure([], 1)
+
+    assert player.calls == []
+
+
+def test_a_reaper_error_on_settings_during_an_excerpt_keeps_the_settings(
+    session, excerpt, player
+) -> None:
+    """The settings are the session's: start sends them all again."""
+    session.preview()
+    player.failures["transpose"] = ListenerSilent("the listener did not answer")
+
+    refused(lambda: session.configure(["drums"], 3), "listener_silent")
+
+    view = session.view()
+    assert (view.muted, view.key, view.previewing, view.error) == (
+        ("drums",),
+        3,
+        True,
+        "listener_silent",
+    )
+
+
+def test_start_during_an_excerpt_plays_the_song_from_its_start(
+    session, excerpt, player
+) -> None:
+    session.preview()
+    player.calls.clear()
+
+    session.start()
+
+    assert player.names() == ["load"] + ["set_mute"] * 7 + ["transpose", "play"]
+    view = session.view()
+    assert (view.state, view.entry_id, view.previewing, view.position_s) == (
+        "playing",
+        excerpt.id,
+        False,
+        0.0,
+    )
+
+
+def test_a_reaper_error_on_start_during_an_excerpt_ends_the_excerpt(
+    session, excerpt, player
+) -> None:
+    session.preview()
+    player.failures["load"] = ListenerSilent("the listener did not answer")
+
+    refused(session.start, "listener_silent")
+
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s) == ("setup", False, None)
+
+
+def test_skip_during_an_excerpt_stops_it_first(
+    session, playlist, excerpt, player
+) -> None:
+    following = playlist.add(library_song(SECOND))
+    session.preview()
+    player.calls.clear()
+
+    session.skip()
+
+    assert player.calls == [("stop",)]
+    view = session.view()
+    assert (view.state, view.entry_id, view.previewing, view.position_s) == (
+        "setup",
+        following.id,
+        False,
+        None,
+    )
+
+
+def test_removing_the_song_of_an_excerpt_stops_it_first(
+    session, playlist, excerpt, player
+) -> None:
+    other = playlist.add(library_song(SECOND))
+    session.preview()
+    player.calls.clear()
+
+    session.remove(other.id)
+    assert (player.calls, session.view().previewing) == ([], True)
+    session.remove(excerpt.id)
+
+    assert player.calls == [("stop",)]
+    view = session.view()
+    assert (view.state, view.entry_id, view.previewing) == ("setup", None, False)
+
+
+def test_a_reaper_error_on_preview_stays_in_setup_without_an_excerpt(
+    session, excerpt, player
+) -> None:
+    player.failures["seek"] = ReaperError("REAPER failed")
+
+    refused(session.preview, "reaper_failed")
+
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s, view.error) == (
+        "setup",
+        False,
+        None,
+        "reaper_failed",
+    )
+
+
+def test_a_failed_poll_during_an_excerpt_keeps_it_and_shows_the_error(
+    session, excerpt, player
+) -> None:
+    session.preview()
+    player.failures["position"] = ReaperUnreachable("could not reach REAPER")
+
+    session.poll()
+
+    view = session.view()
+    assert (view.previewing, view.position_s, view.error) == (
+        True,
+        EXCERPT_START,
+        "reaper_unreachable",
+    )
+    del player.failures["position"]
+    session.poll()
+    assert session.view().error is None
+
+
+def test_the_excerpt_follower_ends_it_alone(
+    playlist, packages, player, excerpt
+) -> None:
+    session = Session(playlist, packages.path, player, poll_s=0.001)
+    player.positions = [10.0, 15.0, EXCERPT_END]
+
+    session.preview()
+    deadline = time.monotonic() + 5
+    while session.view().previewing and time.monotonic() < deadline:
+        time.sleep(0.001)
+    session.close()
+
+    view = session.view()
+    assert (view.state, view.previewing) == ("setup", False)
+    assert player.names().count("stop") == 1
+
+
+def test_a_start_ends_the_follower_of_the_excerpt(
+    playlist, packages, player, excerpt
+) -> None:
+    """Past the excerpt's end, its follower would stop the song started."""
+    session = Session(playlist, packages.path, player, poll_s=0.001)
+    session.preview()
+    player.positions = [EXCERPT_END + 10]
+
+    session.start()
+    time.sleep(0.05)
+    session.close()
+
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s) == (
+        "playing",
+        False,
+        EXCERPT_END + 10,
+    )
+    assert "stop" not in player.names()
+
+
+def test_reaper_ending_an_excerpt_is_not_the_end_of_the_song_after_it(
+    playlist, packages, reaper, excerpt
+) -> None:
+    reaper.tracks = ["Mic 1", "Mic 2", "Music", *(stem.title() for stem in STEMS)]
+    # The excerpt's polls see REAPER stop on its own; then the song plays.
+    reaper.transport = [(1, 9.5), (0, 0.0), (1, 0.5)]
+    session = Session(
+        playlist,
+        packages.path,
+        ReaperPlayer(http=reaper.http(), poll_s=0),
+        follow=False,
+    )
+    session.preview()
+    session.poll()
+    session.poll()
+    ended = session.view()
+
+    session.start()
+    session.poll()
+
+    assert (ended.state, ended.previewing) == ("setup", False)
+    assert session.view().state == "playing"
+    steps = reaper.ops()
+    excerpt_steps = steps[: steps.index("SET/POS/9.500") + 1]
+    assert excerpt_steps[-3:] == ["40042", "1007", "SET/POS/9.500"]

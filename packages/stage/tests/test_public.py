@@ -295,6 +295,26 @@ def test_the_end_of_a_song_is_published_without_anchor_or_lyrics(stage) -> None:
     assert stage.snapshot()["lyrics"] is None
 
 
+def test_an_excerpt_in_the_setup_publishes_no_anchor_and_no_lyrics(stage) -> None:
+    """The phone shows the song playing only; the excerpt is the TV's own."""
+    entry = stage.add(FIRST)
+    stage.player.positions = [0.5]
+    stage.session.preview()
+    stage.session.poll()
+    assert stage.session.view().previewing
+
+    stage.publisher.cycle()
+
+    assert stage.snapshot()["session"] == {
+        "state": "setup",
+        "entry_id": entry.id,
+        "duration_s": 200.0,
+        "paused": False,
+        "anchor": None,
+    }
+    assert stage.snapshot()["lyrics"] is None
+
+
 def test_a_pause_is_published_at_once_with_the_position_it_paused_at(stage) -> None:
     stage.add(FIRST)
     stage.session.start()

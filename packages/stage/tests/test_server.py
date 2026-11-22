@@ -68,10 +68,48 @@ def test_state_of_a_new_stage(stage) -> None:
             "detail": None,
             "paused": False,
             "volumes": None,
+            "previewing": False,
             "stems": [],
         },
         "playlist": [],
     }
+
+
+def test_preview_and_its_stop_answer_the_state(stage, player) -> None:
+    entry = stage.add(FIRST)
+
+    previewing = stage.client.post("/api/session/preview")
+    stopped = stage.client.post("/api/session/preview/stop")
+    again = stage.client.post("/api/session/preview/stop")
+
+    assert previewing.status_code == 200
+    session = previewing.json()["session"]
+    # LYRICS' first line is at 1 s, so the excerpt starts at the song's start.
+    assert (
+        session["state"],
+        session["entry_id"],
+        session["previewing"],
+        session["position_s"],
+    ) == ("setup", entry["id"], True, 0.0)
+    assert "position_at_s" not in session
+    assert stopped.status_code == 200
+    session = stopped.json()["session"]
+    assert (session["previewing"], session["position_s"]) == (False, None)
+    assert (again.status_code, again.json()["error"]) == (409, "wrong_state")
+    assert player.names().count("seek") == 1
+    assert player.names().count("stop") == 1
+
+
+def test_preview_refusals_carry_a_code(stage, player) -> None:
+    empty = stage.client.post("/api/session/preview")
+    stage.add(FIRST)
+    player.failures["load"] = ListenerSilent("the karaoke listener did not answer")
+    silent = stage.client.post("/api/session/preview")
+
+    assert (empty.status_code, empty.json()["error"]) == (409, "no_song")
+    assert (silent.status_code, silent.json()["error"]) == (502, "listener_silent")
+    session = stage.client.get("/api/state").json()["session"]
+    assert (session["state"], session["previewing"]) == ("setup", False)
 
 
 def test_pause_and_resume_answer_the_state(stage, player) -> None:

@@ -1368,6 +1368,31 @@ def test_the_excerpt_follower_ends_it_alone(
     assert player.names().count("stop") == 1
 
 
+def test_the_excerpt_follower_outlives_a_failed_read(
+    playlist, packages, player, excerpt
+) -> None:
+    session = Session(playlist, packages.path, player, poll_s=0.001)
+    player.failures["position"] = ReaperUnreachable("could not reach REAPER")
+    player.positions = [10.0, EXCERPT_END]
+
+    session.preview()
+    deadline = time.monotonic() + 5
+    while session.view().error is None and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert (session.view().previewing, session.view().error) == (
+        True,
+        "reaper_unreachable",
+    )
+    del player.failures["position"]
+    while session.view().previewing and time.monotonic() < deadline:
+        time.sleep(0.001)
+    session.close()
+
+    view = session.view()
+    assert (view.state, view.previewing, view.error) == ("setup", False, None)
+    assert player.names().count("stop") == 1
+
+
 def test_a_start_ends_the_follower_of_the_excerpt(
     playlist, packages, player, excerpt
 ) -> None:

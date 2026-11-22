@@ -90,9 +90,19 @@ class SessionView:
 
 def excerpt_start_s(song: lib.Song) -> float:
     """EXCERPT_LEAD_S before the first sung line, or the start of a song
-    without synced lyrics. A stamp without text is no sung line.
+    without synced lyrics or whose lyrics cannot be read. A stamp without
+    text is no sung line.
     """
-    lyrics = song_lyrics(song)
+    try:
+        lyrics = song_lyrics(song)
+    # A file it cannot open, or one saved in another encoding than UTF-8.
+    except (OSError, UnicodeDecodeError) as error:
+        log.warning(
+            "could not read the lyrics of %s, so the excerpt starts at 0: %s",
+            song.manifest.id,
+            error,
+        )
+        return 0.0
     if lyrics.status != "synced":
         return 0.0
     for line in lyrics.lines:

@@ -1,5 +1,6 @@
 import inspect
 import json
+import logging
 import shutil
 import threading
 import time
@@ -1065,6 +1066,31 @@ def test_an_excerpt_without_synced_lyrics_starts_at_0(
 
     assert ("seek", 0.0) in player.calls
     assert session.view().position_s == 0.0
+
+
+@pytest.mark.parametrize("damage", ["missing", "undecodable"])
+def test_an_excerpt_whose_lyrics_cannot_be_read_starts_at_0(
+    session, playlist, packages, player, damage, caplog
+) -> None:
+    packages.add(SYNCED, lyrics=SYNCED_LYRICS)
+    lyrics_path = packages.path / SYNCED / "lyrics.lrc"
+    if damage == "missing":
+        lyrics_path.unlink()
+    else:
+        # Saved in Latin-1, not UTF-8.
+        lyrics_path.write_bytes(b"[00:12.50] Caf\xe9\r\n")
+    playlist.add(library_song(SYNCED))
+
+    with caplog.at_level(logging.WARNING, logger="stage"):
+        session.preview()
+
+    assert ("seek", 0.0) in player.calls
+    view = session.view()
+    assert (view.previewing, view.position_s, view.error) == (True, 0.0, None)
+    assert len(caplog.messages) == 1
+    assert caplog.messages[0].startswith(
+        f"could not read the lyrics of {SYNCED}, so the excerpt starts at 0: "
+    )
 
 
 def test_preview_takes_the_time_of_its_start_after_the_seek(

@@ -1208,17 +1208,39 @@ def test_preview_stop_stops_reaper_and_ends_the_excerpt(
     assert player.calls[-1] == ("stop",)
     view = session.view()
     assert (view.state, view.previewing, view.position_s) == ("setup", False, None)
-    refused(session.preview_stop, "wrong_state")
-    assert player.names().count("stop") == 1
 
 
-def test_preview_stop_only_during_an_excerpt(session, excerpt, player) -> None:
-    refused(session.preview_stop, "wrong_state")
+def test_preview_stop_after_the_excerpt_ended_does_nothing(
+    session, excerpt, player
+) -> None:
+    """A click on stop can land just after the excerpt ended on its own."""
+    player.positions = [EXCERPT_END]
+    session.preview()
+    session.poll()
+    player.calls.clear()
+
+    session.preview_stop()
+
+    assert player.calls == []
+    view = session.view()
+    assert (view.state, view.previewing, view.position_s, view.error) == (
+        "setup",
+        False,
+        None,
+        None,
+    )
+
+
+def test_preview_stop_outside_the_setup_is_refused(session, excerpt, player) -> None:
     session.start()
 
     refused(session.preview_stop, "wrong_state")
-
     assert "stop" not in player.names()
+    session.stop()
+    player.calls.clear()
+
+    refused(session.preview_stop, "wrong_state")
+    assert player.calls == []
 
 
 def test_a_reaper_error_on_preview_stop_still_ends_the_excerpt(

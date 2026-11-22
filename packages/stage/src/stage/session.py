@@ -242,9 +242,11 @@ class Session:
             self._follow_with(self._poll_excerpt)
 
     def preview_stop(self) -> None:
+        """In setup without an excerpt it does nothing: a click on stop can
+        land just after the excerpt ended on its own.
+        """
         with self._lock:
-            if self._state != "setup" or not self._previewing:
-                raise SessionError("wrong_state", "no excerpt plays")
+            self._require("setup")
             self._stop_excerpt()
 
     def stop(self) -> None:

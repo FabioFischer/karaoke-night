@@ -95,7 +95,9 @@ def test_preview_and_its_stop_answer_the_state(stage, player) -> None:
     assert stopped.status_code == 200
     session = stopped.json()["session"]
     assert (session["previewing"], session["position_s"]) == (False, None)
-    assert (again.status_code, again.json()["error"]) == (409, "wrong_state")
+    # A late click, once the excerpt ended, answers as a stop does.
+    assert again.status_code == 200
+    assert again.json()["session"]["previewing"] is False
     assert player.names().count("seek") == 1
     assert player.names().count("stop") == 1
 

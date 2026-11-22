@@ -24,7 +24,7 @@ Once per Stage machine, then check it again before each night.
 
    Restart REAPER. The listener now runs whenever REAPER is open. Check it with `uv run stage play` on a song of the library (next section): a listener that is not running makes the command fail with "the karaoke listener in REAPER did not answer". Errors from the script appear in REAPER's *ReaScript console output* window.
 6. **Open the session:** *File > Open project*, `reaper/template/karaoke.RPP`. Choose the interface's inputs if they are not inputs 1 and 2. To keep an effects chain or other changes, save the session under another name, outside the clone (*File > Save project as*), and open that one on later nights: loading songs changes the session, and the template in the clone stays as it is.
-7. **Plugged in, best performance:** run the machine on its charger with Windows' power mode at *Best performance*. On battery, the A6 test needed a 512 sample buffer before input monitoring stopped crackling (S1 ran at 128 plugged in).
+7. **Plugged in, best performance, 64 samples:** run the machine on its charger with Windows' power mode at *Best performance*. In *Options > Preferences > Audio > Device*, choose the interface's own ASIO driver (ASIO4ALL only for an interface without one), check **Request block size** and set it to **64**. The menu bar must then show `64spls`: with the box off, REAPER takes the size from the driver's own panel, and in S1 round 2 it ran at 512 without saying so. Plugged in, S1 round 2 ran clean at 64 under a full night's load; if a machine crackles, 256 was comfortable too. On battery, the A6 test needed 512.
 8. **A single monitoring path:** the voice is monitored by REAPER's input monitoring on `Mic 1` and `Mic 2` only. Turn off the interface's direct monitoring and any other path (such as Windows' *Listen to this device*): two paths sound doubled and robotic (S1).
 
 Load a song and play it from a terminal on the Stage, in the repository root:
@@ -47,13 +47,13 @@ The effects chain on `Mic 1` and `Mic 2` is chosen by hand in REAPER; the app ne
 
 What adds to the voice's delay: the round trip of the interface and its driver (set by the buffer size), plus the internal latency of every plugin on the mic track. Pitch correction always has some, since it needs a stretch of audio to detect the pitch.
 
-Measured in the guided test (A6, 2026-11-13), on the Stage with an entry-level interface through ASIO4ALL, buffer at 512 samples (running on battery; see the checklist):
+Measured in the guided test (A6, 2026-11-13), on the Stage with an entry-level interface through ASIO4ALL, buffer at 512 samples (running on battery; see the checklist), then in S1 round 2 (2026-11-22) with an interface with a native ASIO driver, plugged in:
 
 | Option | Settings | Result |
 |---|---|---|
-| Graillon 3 Free (Auburn Sounds) | Pitch Engine `G3`; Pitch Shift 0, Formant off; Correction on, Correction Amount 100%, Smooth to taste (minimum is hard tuning), Snap Min low, Snap Max 8, Inertia low; Output **Wet 100%, Dry 0** | Good correction. Adds about 26 ms: the voice went from about 30 ms to about 56 ms round trip, which was uncomfortable at that buffer. |
+| Graillon 3 Free (Auburn Sounds) | Pitch Engine `G3`; Pitch Shift 0, Formant off; Correction on, Correction Amount 100%, Smooth to taste (minimum is hard tuning), Snap Min low, Snap Max 8, Inertia low; Output **Wet 100%, Dry 0** | Good correction. Reports 1075 samples, about 25 ms at a 64 sample buffer and 29 ms at 256. With the native driver at 64 the voice comes back in about 36 ms, comfortable; at 256, about 52 ms, comfortable too (S1 round 2). Through ASIO4ALL at 512 it was about 56 ms and uncomfortable (A6). |
 | ReaTune (ships with REAPER) | Correction tab, automatic, chromatic | About 7000 samples (about 160 ms) of delay: not usable live. |
 
 - **Dry must be 0 in Graillon.** Dry is the input delayed to line up with the corrected voice; left up, the uncorrected voice sounds under the corrected one.
 - **The `I2` engine** of Graillon is very heavy on the CPU (its guide calls it "very slow mode"): not for live use. Graillon's full edition adds tuning per key, pitch tracking modulation and a doubler; its guide mentions no lower latency.
-- **Still to test, after the interface upgrade:** Graillon at a 128 sample buffer with the machine plugged in. In S1 the same plugin at 128 samples felt comfortable. The test waits for the new interface, together with S1 round 2, since the latency and the buffer may change with it. A native ASIO interface lowers the round trip of the interface, not the plugin's own latency.
+- **A plugin's delay** shows in samples at the foot of the FX chain window. For Graillon the second number came out as a whole number of buffers (1088 = 17 × 64, 1280 = 5 × 256), so a smaller buffer also trims the plugin's share. A native ASIO interface lowers the round trip of the interface, not the plugin's own latency.

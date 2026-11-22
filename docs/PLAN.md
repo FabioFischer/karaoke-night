@@ -4,16 +4,15 @@
 
 ## Status
 
-*Last updated: 2026-11-14*
+*Last updated: 2026-11-22*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) in progress.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 round 1, S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only during an event, and the public page lives on Vercel, fed by a snapshot the Stage publishes. Milestone A10 (public access, §5.9, results in §6 Phase 1).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 rounds 1 and 2 (round 2 with a native ASIO interface: 64 samples is the working buffer), S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only during an event, and the public page lives on Vercel, fed by a snapshot the Stage publishes. Milestone A10 (public access, §5.9, results in §6 Phase 1).
 - **In progress:** milestone A9 (first night): the night scripts (`scripts/`) and the runbook (`docs/NIGHT.md`) are done and checked live (results in §6 Phase 1); the full test session at the venue is left. Milestone B1, the first of the beta (Phase 2): pause, volumes and reordering.
 - **Next:**
   - the A8 criterion with someone who has never used the app, at the first night (A9);
   - measure a package download on the venue's own network during the first night (A9, `docs/NIGHT.md`);
-  - count the public page's edge requests and store commands on the first public night (§8);
-  - after an interface upgrade, which the beta's second mic needs anyway: S1 round 2, and the pitch correction test plugged in at a 128 sample buffer (A6 results), which finishes the effects chain guide in `reaper/README.md`. The test waits for the new interface because the latency and the buffer may change with it.
+  - count the public page's edge requests and store commands on the first public night (§8).
 
 ## 1. Goal
 
@@ -21,7 +20,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 
 ## 2. Key constraints
 
-- **Latency.** The live voice path (mic → interface → effects → speakers) should feel natural to sing with. About 12 ms round trip is the usual reference, but S1 showed that around 25 ms can still be comfortable, so comfort decides. Effects in that path must add no latency of their own: no look-ahead compressors, and pitch correction in low-latency mode.
+- **Latency.** The live voice path (mic → interface → effects → speakers) should feel natural to sing with. About 12 ms round trip is the usual reference, but S1 found singing comfortable from about 11 ms up to about 50 ms with pitch correction on, so comfort decides. Effects in that path must add no latency of their own: no look-ahead compressors, and pitch correction in low-latency mode.
 - **ASIO is single-client.** REAPER owns the audio device, so the app never opens it.
 - **Original stems of well-known songs aren't publicly available,** because master recording rights are licensed case by case. Stems are produced with AI source separation instead. Separating lead from backing vocals is the least reliable step.
 - **Streaming services don't provide audio.** Spotify's API is metadata only (the audio is DRM-protected). The practical sources are YouTube (via `yt-dlp`) and local files.
@@ -437,6 +436,14 @@ The goal is to remove the big risks before building the app. Each spike has a cr
   - the voice was monitored twice (REAPER's input monitoring plus another monitoring path), which sounds doubled and robotic.
 - These become setup rules for the template and the first-night checklist (A6, A9).
 
+**S1, round 2 (2026-11-22): pass.** An interface with two mic preamps and a native ASIO driver, wired to active studio monitors with balanced cables, on the same Stage machine, plugged in, at 44.1 kHz. The click was recorded through the air, with the mic 30 cm from a speaker (round 1's runbook).
+
+- **REAPER must request the buffer size.** With *Request block size* off, REAPER ran at 512 samples whatever the driver's own control panel said, so the first measurements (about 34 to 45 ms) and an earlier test by ear "at 64" were really at 512. With it on, the menu bar shows the size in use.
+- **Round trip:** about 11 ms at 64 samples (REAPER reports 2.9/3.4 ms) and about 23 ms at 256 (7.3/8.5 ms), against round 1's 22 ms at 64. 128 was not measured: both ends were comfortable.
+- **Pitch correction:** Graillon 3 Free reports 1075 samples, and REAPER showed it as a whole number of buffers: 1088 at 64 (about 25 ms) and 1280 at 256 (about 29 ms). The voice with it comes back in about 36 ms at 64 and about 52 ms at 256. Singing was comfortable at both, with and without it. The click test never shows a plugin's delay: the recording takes the input before the track's effects.
+- **Load test at 64 samples:** a full night started by `stage-night.ps1` (`stage serve`, the browser in full screen, the public store, the Studio up), Graillon on both mic tracks and effects changed by hand while singing, 5 songs in a row, and a new song separated and downloaded (98 MB in about 84 s) while another played. No crackle. Only one song was transposed, for under a minute, and not during the download.
+- **64 samples is the working buffer;** 256 is the fallback for a machine that crackles. The setup rules are in `reaper/README.md`.
+
 **S3, round 1 (2026-11-11): pass.** Listener, driver and runbook in [`spikes/s3-reaper/`](https://github.com/FabioFischer/karaoke-night/tree/148dd6f3320a73af0f6b65f020c23b19c75cce30/spikes/s3-reaper). Two generated test songs, 7 WAV stems of 240 s each, on the Stage machine of S1.
 
 - **Load:** 80 loads alternating two songs, with the mic monitored and someone singing into it: no audible dropout, and no failed load. Command to ack round trip: median 64 to 84 ms, max 101 ms (the first, cold load took 164 ms). The listener's own work: 12 to 19 ms. The 2 s target has a wide margin.
@@ -552,8 +559,8 @@ A7 and A8 already follow the beta screens (§5.7): the same routes, search resul
 - **How REAPER reports the end:** a 50 ms poll of `TRANSPORT` showed playing (1), paused (2) at the pause button, playing (1) again when it was pressed again, with no stopped state in between, and stopped (0) at the end. At the end the position goes back to where playback last started (31.32 s after a resume there), not to the end of the song, so the rule cannot rest on the duration; "stopped without the Stage asking" is the rule, and a stop by hand (the space bar is play/stop in REAPER) ends the song too. Ctrl+C in a console stopped playback and exited 130.
 - **Listener:** a malformed command got an error ack with its id, and a command with no readable id an error ack without one; the next `ping` answered. A stem track the listener created came with input monitoring off. During the test the S3 listener, started by hand from the action list, was still running next to the startup one and was the one a malformed command killed: start the listener only from `__startup.lua`.
 - **Headroom:** the stems come close to full scale, so the voice on top was quiet, and clipped once raised. The template now holds the stems in a `Music` folder track at -8 dB, which left room for the voice and gives the music one fader.
-- **Input monitoring crackled** on battery until the buffer went up to 512 samples (S1 ran clean at 128 plugged in); repeating it plugged in is pending.
-- **Pitch correction,** the guided test for the effects chain guide (`reaper/README.md`): Graillon 3 Free corrected well but added about 26 ms (from about 30 to about 56 ms round trip at 512 samples), uncomfortable at that buffer; ReaTune added about 7000 samples and is not usable live.
+- **Input monitoring crackled** on battery until the buffer went up to 512 samples; plugged in, S1 round 2 ran clean at 64 under a full night's load.
+- **Pitch correction,** the guided test for the effects chain guide (`reaper/README.md`): Graillon 3 Free corrected well but added about 26 ms (from about 30 to about 56 ms round trip at 512 samples), uncomfortable at that buffer; with a native driver at 64 samples it was comfortable (S1 round 2). ReaTune added about 7000 samples and is not usable live.
 
 **A7 (2026-11-14): pass.** `stage search` on the Stage, ytmusicapi 1.12.3 and yt-dlp 2026.10.26, over the 21 test songs typed as in S4, checked by a script against the video ids the S4 verdicts chose (the ones A3 processed).
 
@@ -624,7 +631,7 @@ Proposed order of the items:
 | Item | Recommendation |
 |---|---|
 | Microphones | Cardioid dynamic (for example Shure SM58 or Behringer XM8500): they resist feedback and need no phantom power. If wireless, prefer analog UHF with XLR outputs; 2.4 GHz digital systems add a few ms. |
-| Audio interface | At least 2 mic preamps and a native ASIO driver (for example Behringer UMC204HD or Focusrite Scarlett 2i2). Without a native driver it still works through ASIO4ALL, at about 22–24 ms round trip (S1). |
+| Audio interface | At least 2 mic preamps and a native ASIO driver (for example Behringer UMC204HD or Focusrite Scarlett 2i2). With one, S1 round 2 measured about 11 ms round trip at 64 samples. Without a native driver it still works through ASIO4ALL, at about 22 to 24 ms (S1 round 1). |
 | Speakers | Wired from the interface output. **Never Bluetooth**, which adds 100–200 ms of delay. Enough power to hear the voice over the music without running at full volume. For larger rooms, a PA with a line input. |
 | Stage machine | High-performance power plan, plugged in, validated with LatencyMon. |
 | Studio machine | A CUDA-capable NVIDIA GPU. S2 peaked at 5.3 GB reserved by PyTorch (combination B), so 8 GB of VRAM should be enough. |
@@ -634,7 +641,7 @@ Proposed order of the items:
 | Risk | Mitigation |
 |---|---|
 | High latency on the Stage machine (DPC or drivers) | Run S1 early. Plan B uses direct monitoring. Use an interface with a native ASIO driver. |
-| Other singers notice the latency more than the maintainer did in S1 | Ask the singers on the first night (A9). Plan B and a native-driver interface remain options. |
+| Other singers notice the latency more than the maintainer did in S1 | Ask the singers on the first night (A9). Pitch correction off saves about 25 ms (S1 round 2), and plan B remains an option. |
 | Studio offline, or no internet at the venue | Preload the library. In the beta, a cloud Studio. |
 | The public page goes over a free tier (Vercel Hobby or Upstash) on a busy night | Count edge requests and store commands on the first public night (A10). Phones poll every 2 s and the edge caches each answer for 1 s (§5.9); a slower poll costs only playlist latency, not lyrics timing. |
 | YouTube changes and `yt-dlp` breaks | Keep `yt-dlp` up to date (recent versions need a JS runtime such as Deno). Accept local files as a source. Measured in the A3 batch with `yt-dlp` 2026.10.26, the latest stable release then: of 21 downloads in a row, 4 were blocked by YouTube, 3 with `HTTP Error 403: Forbidden` on the download after the metadata had worked and 1 with "Sign in to confirm you're not a bot"; tried again later, all 4 downloaded normally (3 within minutes, the last about an hour later). `studio process` has no retry: the failure is shown, and trying again is left to the person. The Studio API job queue (§5.3) tries a failed download again, and only a download: up to 3 retries, after 2, 10 and 30 minutes. |

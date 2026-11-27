@@ -391,9 +391,61 @@ button:disabled {
   overflow-y: auto;
 }
 
+/* Out of an excerpt the controls are the setup's own grid items. */
+.setup-controls {
+  display: contents;
+}
+
+/* During an excerpt: the controls on the left, the lyrics on the right, each its own scroll. */
+.setup-previewing {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  justify-items: stretch;
+  overflow: hidden;
+}
+
+.setup-previewing .setup-controls {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 1rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.setup-lyrics {
+  min-height: 0;
+  border-radius: 0.6rem;
+  background: var(--surface);
+}
+
+.setup-lyrics .lyrics-synced {
+  padding-block: 25svh;
+  font-size: 2rem;
+}
+
 .setup section {
   display: grid;
   gap: 0.5rem;
+}
+
+.setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.button-preview {
+  margin-top: 0.6rem;
+  min-width: 12rem;
+  font-size: 1.4rem;
+}
+
+.button-preview[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .setup-empty {

@@ -221,7 +221,8 @@ class FakeReaper:
     repeats. on_transport, when set, runs before each TRANSPORT reply with the
     number of reads so far. A read past MAX_TRANSPORT_READS fails the test.
     volumes holds the gain of each track by index, 1.0 (0 dB) when missing;
-    SET/TRACK/i/VOL takes only an absolute gain written as a plain decimal.
+    SET/TRACK/i/VOL takes only an absolute gain written as a plain decimal,
+    and SET/POS only seconds written so.
     """
 
     def __init__(self, tracks: tuple[str, ...] = TEMPLATE_TRACKS) -> None:
@@ -279,6 +280,9 @@ class FakeReaper:
             assert field == "MUTE", command
             self.muted[int(index)] = value == "1"
             return ""
+        if command.startswith("SET/POS/"):
+            assert re.fullmatch(r"\d+\.\d+", command[len("SET/POS/") :]), command
+            return ""
         if command.startswith(_CMD):
             sent = json.loads(unquote(command[len(_CMD) :]))
             self.sent.append(sent)
@@ -300,7 +304,7 @@ class FakeReaper:
             if command.startswith(_CMD):
                 sent = json.loads(unquote(command[len(_CMD) :]))
                 steps.append(sent["op"])
-            elif command.startswith("SET/TRACK/") or command.isdigit():
+            elif command.startswith(("SET/TRACK/", "SET/POS/")) or command.isdigit():
                 steps.append(command)
         return steps
 
@@ -428,6 +432,9 @@ class FakePlayer:
 
     def stop(self) -> None:
         self._call("stop")
+
+    def seek(self, seconds: float) -> None:
+        self._call("seek", seconds)
 
     def set_mute(self, stem: str, muted: bool) -> None:
         self._call("set_mute", stem, muted)

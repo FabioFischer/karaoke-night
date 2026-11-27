@@ -603,6 +603,33 @@ def test_a_volume_far_below_is_never_a_relative_or_exponent_value(reaper) -> Non
     assert reaper.commands[1:] == ["SET/TRACK/1/VOL/0.000000"]
 
 
+@pytest.mark.parametrize(
+    ("seconds", "value"),
+    [(0.0, "0.000"), (9.5, "9.500"), (125.25, "125.250"), (1e-7, "0.000")],
+)
+def test_seek_sets_the_position_in_seconds_as_a_plain_decimal(
+    reaper, seconds, value
+) -> None:
+    player = connected(reaper)
+
+    player.seek(seconds)
+
+    assert reaper.commands[1:] == [f"SET/POS/{value}"]
+
+
+def test_a_seek_while_playing_is_not_an_end_of_song(reaper) -> None:
+    reaper.transport = [(PLAYING, 0.0), (PLAYING, 9.5), (PLAYING, 9.75)]
+    player = connected(reaper)
+    player.play()
+    player.position()
+
+    player.seek(9.5)
+    player.position()
+    player.position()
+
+    assert not player.ended()
+
+
 def test_set_volume_reads_the_tracks_again_when_it_does_not_know_the_track(
     reaper,
 ) -> None:

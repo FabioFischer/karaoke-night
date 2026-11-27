@@ -1,9 +1,10 @@
 """The player behind the Stage, and REAPER as one (docs/PLAN.md sections 4 and 5.4).
 
 ReaperPlayer drives REAPER through its built-in web interface. Transport,
-tracks, mute and volume go straight to it; load, transpose and ping go to the Lua
-listener (reaper/scripts/karaoke_listener.lua) through ExtState: the command is
-written to karaoke/cmd and the reply read back from karaoke/ack, matched by id.
+seeking, tracks, mute and volume go straight to it; load, transpose and ping go
+to the Lua listener (reaper/scripts/karaoke_listener.lua) through ExtState: the
+command is written to karaoke/cmd and the reply read back from karaoke/ack,
+matched by id.
 The protocol is the top comment of main.js in REAPER's reaper_www_root
 folder.
 """
@@ -51,6 +52,9 @@ class Player(Protocol):
         """Play the loaded song from its start."""
 
     def stop(self) -> None: ...
+
+    def seek(self, seconds: float) -> None:
+        """Move playback to seconds from the start of the song."""
 
     def set_mute(self, stem: str, muted: bool) -> None: ...
 
@@ -163,6 +167,13 @@ def volume_command(index: int, db: float) -> str:
     return f"SET/TRACK/{index}/VOL/{db_to_gain(db):.6f}"
 
 
+def seek_command(seconds: float) -> str:
+    # main.js: "Sets edit cursor position (seeking playback) to
+    # value_in_seconds". It says nothing of a sign or an exponent, so the
+    # value goes plain, as in volume_command.
+    return f"SET/POS/{seconds:.3f}"
+
+
 def track_index_map(tracks: list[Track]) -> dict[str, int]:
     """Lowercase track name to web interface index, as the listener matches
     names. Index 0 is the master; the first of two tracks with one name wins.
@@ -253,6 +264,9 @@ class ReaperPlayer:
     def stop(self) -> None:
         self._stop_requested = True
         self._request(_STOP)
+
+    def seek(self, seconds: float) -> None:
+        self._request(seek_command(seconds))
 
     def set_mute(self, stem: str, muted: bool) -> None:
         self._request(f"SET/TRACK/{self._index(stem)}/MUTE/{int(muted)}")

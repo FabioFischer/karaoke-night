@@ -5,6 +5,10 @@ at once or through its setup. A song ends when REAPER stops on its own
 (player.ended(), section 5.4); a stop the Stage asks for is not an end, so
 the session itself moves to the results. A pause keeps the session playing.
 
+The excerpt is a state inside setup, as a pause is inside playing: a short
+part of the song plays so the singer can try the key, the mutes and the
+volumes. It ends in the setup, never in the results, whoever stops it.
+
 The REAPER listener has single slot cmd and ack, so every Player call goes
 through one lock: actions and the position polls never overlap. Removing and
 moving entries take it too, so the session's own entry cannot change under
@@ -20,6 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from stage import library as lib
+from stage.lyrics import song_lyrics
 from stage.player import ListenerSilent, Player, ReaperError, ReaperUnreachable
 from stage.playlist import Entry, Playlist
 
@@ -27,6 +32,9 @@ log = logging.getLogger(__name__)
 
 POLL_S = 0.25
 DEFAULT_MUTED = ("lead",)
+# The excerpt starts this long before the first sung line, and plays this long.
+EXCERPT_LEAD_S = 3.0
+EXCERPT_S = 20.0
 # The template's tracks (docs/PLAN.md section 5.4): the folder of every stem,
 # and the mics, which the voice volume sets together.
 MUSIC_TRACK = "Music"
@@ -57,11 +65,13 @@ class SessionView:
     """What the screen shows of the session.
 
     entry_id is the song of the session: the first entry in setup, the one
-    played in playing and results. paused is only ever true while playing.
-    volumes is None until read from REAPER or set. position_at_s is when
-    REAPER reported position_s, in the session's clock (time.perf_counter);
-    on a resume, when REAPER's resume returned. error and detail are the last
-    failure, cleared by the next action or poll that works.
+    played in playing and results. paused is only ever true while playing,
+    previewing only in setup, while its excerpt plays. position_s is None in
+    setup but during an excerpt. volumes is None until read from REAPER or
+    set. position_at_s is when REAPER reported position_s, in the session's
+    clock (time.perf_counter); on a resume, when REAPER's resume returned.
+    error and detail are the last failure, cleared by the next action or poll
+    that works.
     """
 
     state: SessionState
@@ -75,6 +85,30 @@ class SessionView:
     paused: bool = False
     volumes: Volumes | None = None
     position_at_s: float | None = None
+    previewing: bool = False
+
+
+def excerpt_start_s(song: lib.Song) -> float:
+    """EXCERPT_LEAD_S before the first sung line, or the start of a song
+    without synced lyrics or whose lyrics cannot be read. A stamp without
+    text is no sung line.
+    """
+    try:
+        lyrics = song_lyrics(song)
+    # A file it cannot open, or one saved in another encoding than UTF-8.
+    except (OSError, UnicodeDecodeError) as error:
+        log.warning(
+            "could not read the lyrics of %s, so the excerpt starts at 0: %s",
+            song.manifest.id,
+            error,
+        )
+        return 0.0
+    if lyrics.status != "synced":
+        return 0.0
+    for line in lyrics.lines:
+        if line.text:
+            return max(0.0, line.time_s - EXCERPT_LEAD_S)
+    return 0.0
 
 
 def reaper_code(error: ReaperError) -> str:
@@ -118,7 +152,12 @@ class Session:
         self._detail: str | None = None
         self._paused = False
         self._volumes: Volumes | None = None
-        # A new song or close() ends the follower of the previous one.
+        self._previewing = False
+        # The excerpt's end, and the stems of the song it loaded.
+        self._excerpt_end_s = 0.0
+        self._excerpt_stems: tuple[str, ...] = ()
+        # A new song, a new excerpt or close() ends the follower of the
+        # previous one.
         self._generation = 0
 
     def view(self) -> SessionView:
@@ -140,18 +179,75 @@ class Session:
                 self._paused,
                 self._volumes,
                 self._position_at_s,
+                self._previewing,
             )
 
     def configure(self, muted: list[str], key: int) -> None:
+        """During an excerpt, REAPER takes the settings at once. On a REAPER
+        error the settings are kept all the same: start sends them again.
+        """
         with self._lock:
             self._require("setup")
             self._set(muted=tuple(sorted(set(muted))), key=key)
+            if not self._previewing:
+                return
+            try:
+                for stem in self._excerpt_stems:
+                    self._player.set_mute(stem, stem in self._muted)
+                self._player.transpose(self._key)
+            except ReaperError as error:
+                self._raise(error)
+            self._set(error=None, detail=None)
 
     def start(self) -> None:
         with self._lock:
             self._require("setup")
             entry = self._playlist.first()
-            self._play(entry, self._package(entry))
+            song = self._package(entry)
+            # Loading the song stops the excerpt in REAPER.
+            self._forget_excerpt()
+            self._play(entry, song)
+
+    def preview(self) -> None:
+        """Play the excerpt of the setup's song with its mutes and key; again
+        from its start when one plays already. A REAPER error ends it.
+        """
+        with self._lock:
+            self._require("setup")
+            entry = self._playlist.first()
+            song = self._package(entry)
+            start_s = excerpt_start_s(song)
+            self._forget_excerpt()
+            try:
+                self._player.load((song.folder / "manifest.json").resolve())
+                for stem in song.manifest.stems:
+                    self._player.set_mute(stem, stem in self._muted)
+                self._player.transpose(self._key)
+                # play() goes to the start, so the seek comes after it.
+                self._player.play()
+                self._player.seek(start_s)
+            except ReaperError as error:
+                self._raise(error)
+            self._generation += 1
+            self._excerpt_end_s = start_s + EXCERPT_S
+            self._excerpt_stems = tuple(song.manifest.stems)
+            self._set(
+                previewing=True,
+                position_s=start_s,
+                position_at_s=self._clock(),
+                error=None,
+                detail=None,
+            )
+            self._read_volumes_if_unknown()
+            self._follow_with(self._poll_excerpt)
+
+    def preview_stop(self) -> None:
+        """In setup without an excerpt it does nothing: a click on stop can
+        land just after the excerpt ended on its own.
+        """
+        with self._lock:
+            self._require("setup")
+            self._stop_excerpt()
 
     def stop(self) -> None:
         """Always ends in the results; a REAPER error is still raised."""
@@ -255,6 +351,7 @@ class Session:
             first = self._playlist.first()
             if first is None:
                 raise SessionError("no_song", "the playlist is empty")
+            self._stop_excerpt()
             self._playlist.remove(first.id)
             self._reset()
 
@@ -264,6 +361,9 @@ class Session:
                 raise SessionError(
                     "entry_playing", "the song playing cannot be removed; stop it"
                 )
+            first = self._playlist.first()
+            if first is not None and entry_id == first.id:
+                self._stop_excerpt()
             if not self._playlist.remove(entry_id):
                 raise SessionError("unknown_entry", f"no entry {entry_id}")
 
@@ -285,9 +385,13 @@ class Session:
             self._playlist.move(entry_id, by, fixed=own)
 
     def poll(self) -> None:
-        """Read the position once; moves to the results when the song ended."""
+        """Read the position once; moves to the results when the song ended,
+        or ends the excerpt that plays."""
         with self._lock:
-            self._poll(self._generation)
+            if self._previewing:
+                self._poll_excerpt(self._generation)
+            else:
+                self._poll(self._generation)
 
     def close(self) -> None:
         """End the follower, if one runs."""
@@ -327,26 +431,87 @@ class Session:
             error=None,
             detail=None,
         )
+        self._read_volumes_if_unknown()
+        self._follow_with(self._poll)
+
+    def _read_volumes_if_unknown(self) -> None:
         if self._volumes is None:
             # REAPER may not have answered when stage serve started.
             try:
                 self._read_volumes()
             except ReaperError as error:
                 log.warning("could not read the volumes from REAPER: %s", error)
+
+    def _follow_with(self, poll: Callable[[int], bool]) -> None:
+        """Poll in a thread of its own until poll says the current generation
+        is over."""
         if self._follow:
             threading.Thread(
-                target=self._follow_song,
-                args=(self._generation,),
+                target=self._follow_loop,
+                args=(poll, self._generation),
                 name="stage-session",
                 daemon=True,
             ).start()
 
-    def _follow_song(self, generation: int) -> None:
+    def _follow_loop(self, poll: Callable[[int], bool], generation: int) -> None:
         while True:
             time.sleep(self._poll_s)
             with self._lock:
-                if not self._poll(generation):
+                if not poll(generation):
                     return
+
+    def _poll_excerpt(self, generation: int) -> bool:
+        """Whether the excerpt of generation still plays. The caller holds _lock.
+
+        It ends at its end, or when REAPER stopped on its own (a song shorter
+        than the excerpt); it never moves the session to the results.
+        """
+        if generation != self._generation or not self._previewing:
+            return False
+        try:
+            asked = self._clock()
+            position = self._player.position()
+            position_at_s = (asked + self._clock()) / 2
+            ended = self._player.ended()
+        except ReaperError as error:
+            self._set(error=reaper_code(error), detail=str(error))
+            return True
+        if ended or position >= self._excerpt_end_s:
+            self._forget_excerpt()
+            if not ended:
+                try:
+                    self._player.stop()
+                except ReaperError as error:
+                    self._set(error=reaper_code(error), detail=str(error))
+                    return False
+            self._set(error=None, detail=None)
+            return False
+        self._set(
+            position_s=position,
+            position_at_s=position_at_s,
+            error=None,
+            detail=None,
+        )
+        return True
+
+    def _stop_excerpt(self) -> None:
+        """Stop the excerpt, if one plays. It ends even when REAPER does not
+        stop, and the error is then raised. The caller holds _lock.
+        """
+        if not self._previewing:
+            return
+        self._forget_excerpt()
+        try:
+            self._player.stop()
+        except ReaperError as error:
+            self._raise(error)
+        self._set(error=None, detail=None)
+
+    def _forget_excerpt(self) -> None:
+        """End the excerpt and its follower, leaving REAPER as it is."""
+        if self._previewing:
+            self._generation += 1
+            self._set(previewing=False, position_s=None, position_at_s=None)
 
     def _poll(self, generation: int) -> bool:
         """Whether the song of generation still plays. The caller holds _lock.

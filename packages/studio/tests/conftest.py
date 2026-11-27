@@ -61,9 +61,45 @@ class FakeSeparator:
         }
 
 
+class FakeAnalysis:
+    """Stands in for RMVPE and librosa's chroma: the lead holds G4 (392 Hz)
+    all along, over a G major triad.
+
+    calls records what each was called with; fail, when set, is raised by
+    track_pitch.
+    """
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+        self.fail: Exception | None = None
+
+    def track_pitch(self, mono: np.ndarray, rate: int, model_dir):
+        self.calls.append(("track_pitch", mono.copy(), rate, model_dir))
+        if self.fail is not None:
+            raise self.fail
+        times = np.arange(int(len(mono) / rate / 0.01)) * 0.01
+        return times, np.full(len(times), 392.0), np.full(len(times), 0.5)
+
+    def chroma(self, mono: np.ndarray, rate: int):
+        self.calls.append(("chroma", mono.copy(), rate))
+        times = np.arange(int(len(mono) / rate * 10)) / 10
+        chroma = np.full((12, len(times)), 0.05)
+        chroma[[7, 11, 2], :] = 1.0
+        return chroma, times
+
+
+def fake_melody(seconds: float) -> dict:
+    """The melody.json document FakeAnalysis gives for stems of that length."""
+    return {
+        "notes": [{"start_s": 0.0, "end_s": seconds, "midi": 67.0}],
+        "keys": [{"start_s": 0.0, "end_s": seconds, "tonic": "G", "mode": "major"}],
+    }
+
+
 class FakeTools:
     """Outside tools for the pipeline: a download that writes placeholder bytes,
-    a convert that writes the mix, the fake separator and a canned LRCLIB.
+    a convert that writes the mix, the fake separator, a canned LRCLIB and the
+    fake analysis.
 
     calls records what each tool was called with. fail maps a tool name to the
     exception it raises.
@@ -75,6 +111,7 @@ class FakeTools:
         self.lyrics_routes = lyrics_routes or {
             "/api/get": (200, {"syncedLyrics": "[00:01.00] Line one"})
         }
+        self.analysis = FakeAnalysis()
         self.calls: list[tuple] = []
         self.fail: dict[str, Exception] = {}
 
@@ -116,6 +153,8 @@ class FakeTools:
             convert=self.convert,
             make_runner=self.make_runner,
             lyrics_get=self.lyrics_get,
+            track_pitch=self.analysis.track_pitch,
+            chroma=self.analysis.chroma,
         )
 
 
@@ -147,3 +186,13 @@ def synthetic_mix() -> Callable[..., np.ndarray]:
 @pytest.fixture
 def fake_separator() -> Callable[..., FakeSeparator]:
     return FakeSeparator
+
+
+@pytest.fixture
+def fake_analysis() -> FakeAnalysis:
+    return FakeAnalysis()
+
+
+@pytest.fixture
+def melody_of() -> Callable[[float], dict]:
+    return fake_melody

@@ -1,4 +1,5 @@
-"""The `studio` command line: `studio process <url|video_id|file>` and `studio serve`."""
+"""The `studio` command line: `studio process <url|video_id|file>`, `studio serve`
+and `studio analyze`."""
 
 import argparse
 import http.client
@@ -12,23 +13,26 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 import uvicorn
 from core.manifest import FileSource, Source, YouTubeMusicSource
 from core.studio_api import JobRequest
 
-from studio import audio, download
+from studio import audio, download, melody
 from studio.api import create_app
 from studio.audio import SAMPLE_RATE, fit_headroom, null_test
 from studio.download import source_metadata, video_id_from
 from studio.jobs import Build, JobQueue
-from studio.library import remove_leftovers
+from studio.library import Busy, Package, remove_leftovers, scan
 from studio.lyrics import PAUSE_S, LrclibError, Paced, lookup, lrclib_get
 from studio.package import (
+    PIPELINE_VERSION,
     build_atomically,
     sha256_file,
     song_id,
     source_key,
+    upgrade_package,
     write_package,
 )
 from studio.separation import (
@@ -42,7 +46,7 @@ from studio.separation import (
 )
 
 # The modules of the `separation` extra.
-EXTRA_MODULES = ("audio_separator", "torch", "yt_dlp")
+EXTRA_MODULES = ("audio_separator", "torch", "yt_dlp", "rmvpe_onnx")
 INSTALL_HINT = "uv sync --package studio --extra separation"
 DEFAULT_LIBRARY = Path("library")
 # The folder spike S2 used, instead of audio-separator's /tmp/audio-separator-models/.
@@ -50,6 +54,7 @@ DEFAULT_MODEL_DIR = Path.home() / ".cache" / "audio-separator-models"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8790
 TOKEN_VARIABLE = "STUDIO_TOKEN"
+BUSY = "a file of the song is open; it stays as it is"
 
 
 def _paced_lrclib():
@@ -71,6 +76,8 @@ class Tools:
     make_runner: Callable[[Path, Path], Runner] = AudioSeparatorRunner
     lyrics_get: Callable = field(default_factory=_paced_lrclib)
     serve: Callable[..., None] = _run_server
+    track_pitch: Callable[[np.ndarray, int, Path], tuple] = melody.rmvpe_track
+    chroma: Callable[[np.ndarray, int], tuple] = melody.instrumental_chroma
 
 
 def resolve_target(target: str) -> tuple[str, Path | str] | None:
@@ -95,9 +102,10 @@ def _add_folder_options(command: argparse.ArgumentParser) -> None:
         "--model-dir",
         type=Path,
         default=DEFAULT_MODEL_DIR,
-        help="where audio-separator downloads and caches models "
-        "(default: ~/.cache/audio-separator-models); the AUDIO_SEPARATOR_MODEL_DIR "
-        "environment variable wins over it, and that folder must exist",
+        help="where audio-separator and RMVPE download and cache models "
+        "(default: ~/.cache/audio-separator-models); for audio-separator, the "
+        "AUDIO_SEPARATOR_MODEL_DIR environment variable wins over it, and that "
+        "folder must exist",
     )
 
 
@@ -153,6 +161,25 @@ def build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         default=DEFAULT_PORT,
         help=f"the port to listen on (default: {DEFAULT_PORT})",
     )
+
+    analyze = commands.add_parser(
+        "analyze",
+        help="give packages of an older pipeline version the melody analysis",
+        description=(
+            "Track the lead melody and the key per section of packages already "
+            "in the library, and replace each with a package of pipeline version "
+            f"{PIPELINE_VERSION} that keeps its stems and lyrics. Never run it "
+            "while a studio serve uses the same library."
+        ),
+    )
+    analyze.add_argument(
+        "song_ids",
+        nargs="*",
+        metavar="SONG_ID",
+        help="the packages to analyze, whatever their version (default: every "
+        f"package below pipeline version {PIPELINE_VERSION})",
+    )
+    _add_folder_options(analyze)
     return parser, process
 
 
@@ -183,8 +210,8 @@ def main(argv: list[str] | None = None, tools: Tools | None = None) -> int:
     parser, process_parser = build_parser()
     argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(_hyphen_ids_last(process_parser, argv))
-    command = process if args.command == "process" else serve
-    return command(args, tools or Tools())
+    commands = {"process": process, "serve": serve, "analyze": analyze}
+    return commands[args.command](args, tools or Tools())
 
 
 def _warn(message: str) -> None:
@@ -294,6 +321,50 @@ def process(args: argparse.Namespace, tools: Tools) -> int:
     return 0
 
 
+def analyze(args: argparse.Namespace, tools: Tools) -> int:
+    if _lacks_extra("analyze", tools):
+        return 1
+
+    started = time.perf_counter()
+    packages = scan(args.library)
+    targets = list(dict.fromkeys(args.song_ids)) or [
+        package_id
+        for package_id, package in packages.items()
+        if package.manifest.pipeline_version < PIPELINE_VERSION
+    ]
+    counts = dict.fromkeys(("analyzed", "busy", "failed"), 0)
+    for package_id in targets:
+        action, reason = _analyze_package(
+            packages.get(package_id), args.model_dir, tools
+        )
+        counts[action] += 1
+        line = f"{action:<8} {package_id}"
+        print(line if reason is None else f"{line}: {reason}", flush=True)
+    print(
+        ", ".join(f"{count} {action}" for action, count in counts.items())
+        + f" in {time.perf_counter() - started:.1f} s"
+    )
+    return 1 if counts["busy"] or counts["failed"] else 0
+
+
+def _analyze_package(
+    package: Package | None, model_dir: Path, tools: Tools
+) -> tuple[str, str | None]:
+    """The action and reason of one line of `studio analyze`."""
+    if package is None:
+        return "failed", "not in the library"
+    try:
+        upgrade_package(
+            package, lambda stems: analyze_stems(stems, model_dir, tools, {})
+        )
+    except Busy:
+        return "busy", BUSY
+    # One package that fails, for whatever reason, must not stop the others.
+    except Exception as error:  # noqa: BLE001
+        return "failed", str(error) or type(error).__name__
+    return "analyzed", None
+
+
 OnStage = Callable[..., None]
 """on_stage(status, step=None), called as each stage starts; step only while separating."""
 
@@ -375,6 +446,7 @@ def build_song(
         on_stage("packaging")
         start = time.perf_counter()
         stems, gain_db = fit_headroom(stems)
+        document = analyze_stems(stems, model_dir, tools, report)
         write_package(
             out,
             stems,
@@ -384,9 +456,12 @@ def build_song(
             gain_db=gain_db,
             lyrics=lyrics,
             models=MODELS,
+            melody=document,
         )
         del stems
-        report["write_seconds"] = _seconds_since(start)
+        report["write_seconds"] = round(
+            _seconds_since(start) - report["melody_seconds"], 2
+        )
         report["gain_db"] = gain_db
         report["audio_s"] = n_frames / SAMPLE_RATE
 
@@ -399,6 +474,22 @@ def build_song(
         shutil.rmtree(work)
 
     return build_atomically(library, package_id, build)
+
+
+def analyze_stems(
+    stems: dict[str, np.ndarray], model_dir: Path, tools: Tools, report: dict
+) -> dict:
+    """The melody document of the stems; report gets its seconds and counts."""
+    start = time.perf_counter()
+    document = melody.analyze(
+        stems,
+        lambda mono, rate: tools.track_pitch(mono, rate, model_dir),
+        tools.chroma,
+    )
+    report["melody_seconds"] = _seconds_since(start)
+    report["melody_notes"] = len(document["notes"])
+    report["melody_keys"] = len(document["keys"])
+    return document
 
 
 def song_builder(library: Path, model_dir: Path, tools: Tools) -> Build:
@@ -447,6 +538,10 @@ def _print_report(report: dict) -> None:
     lyrics = report["lyrics"]
     found = "none" if lyrics is None else lyrics.file
     print(f"{'lyrics':<12} {report['lyrics_seconds']:>8.1f} s  {found}")
+    print(
+        f"{'melody':<12} {report['melody_seconds']:>8.1f} s  "
+        f"{report['melody_notes']} notes, {report['melody_keys']} keys"
+    )
     print(f"{'write':<12} {report['write_seconds']:>8.1f} s")
     print(
         f"{'total':<12} {report['total_seconds']:>8.1f} s "

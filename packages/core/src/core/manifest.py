@@ -69,6 +69,13 @@ class Lyrics(_Model):
     offset_ms: int = 0
 
 
+class Melody(_Model):
+    """The lead melody's notes and the key per section, a JSON file in the package."""
+
+    file: PackagePath
+    sha256: Sha256
+
+
 class Models(_Model):
     vocals: str
     karaoke: str
@@ -89,6 +96,7 @@ class Manifest(_Model):
     gain_db: FiniteFloat
     stems: dict[str, Stem]
     lyrics: Lyrics | None = None
+    melody: Melody | None = None
     models: Models
     created_at: UtcSeconds
 

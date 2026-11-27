@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,7 @@ from core.manifest import FileSource, Manifest, YouTubeMusicSource
 from studio.audio import SAMPLE_RATE
 from studio.lyrics import FoundLyrics
 from studio.package import (
+    PIPELINE_VERSION,
     build_atomically,
     sha256_file,
     slug,
@@ -17,6 +19,10 @@ from studio.package import (
 from studio.separation import MODELS, STEMS, cascade
 
 SOURCE = YouTubeMusicSource(type="youtube_music", video_id="XXXXXXXXXXX")
+MELODY = {
+    "notes": [{"start_s": 0.5, "end_s": 1.25, "midi": 67.03}],
+    "keys": [{"start_s": 0.0, "end_s": 2.0, "tonic": "G", "mode": "major"}],
+}
 
 
 def test_song_id_has_the_section_5_2_shape() -> None:
@@ -60,6 +66,7 @@ def write_test_package(
         gain_db=1.25,
         lyrics=lyrics,
         models=MODELS,
+        melody=MELODY,
     )
 
 
@@ -88,6 +95,22 @@ def test_written_package_loads_and_every_sha256_matches(
         info = sf.info(tmp_path / stem.file)
         assert (info.format, info.subtype) == ("FLAC", "PCM_16")
         assert (info.samplerate, info.channels) == (SAMPLE_RATE, 2)
+
+
+def test_written_package_is_pipeline_version_2_with_its_melody(
+    tmp_path: Path, mix, fake_separator
+) -> None:
+    manifest = write_test_package(tmp_path, mix, fake_separator())
+
+    assert PIPELINE_VERSION == 2
+    assert manifest.pipeline_version == 2
+    assert manifest.melody is not None
+    assert manifest.melody.file == "melody.json"
+    raw = (tmp_path / "melody.json").read_bytes()
+    assert manifest.melody.sha256 == hashlib.sha256(raw).hexdigest()
+    assert json.loads(raw) == MELODY
+    assert raw == (json.dumps(MELODY, indent=2) + "\n").encode("utf-8")
+    assert b"\r" not in raw
 
 
 def test_written_package_records_the_lyrics(
@@ -137,6 +160,7 @@ def test_written_package_takes_a_file_source(
         gain_db=0.0,
         lyrics=None,
         models=MODELS,
+        melody=MELODY,
     )
 
     assert manifest.source == source

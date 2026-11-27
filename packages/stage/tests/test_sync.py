@@ -37,7 +37,7 @@ def assert_mirrors(library: Path, studio, *song_ids: str) -> None:
 
 
 def test_first_sync_downloads_every_song(studio, library: Path) -> None:
-    studio.add(FIRST, extra={"melody": {"notes": [60, 62]}})
+    studio.add(FIRST, extra={"alignment": {"words": [1, 2]}})
     studio.add(SECOND, lyrics=False)
 
     summary = run(library, studio)
@@ -182,6 +182,47 @@ def test_a_stem_that_fails_its_hash_is_not_installed_and_comes_again(
     assert second.outcomes == [Outcome(SECOND, "added")]
     assert_mirrors(library, studio, FIRST, SECOND)
     assert (f"/songs/{SECOND}/files/{LEAD}", None) in studio.file_requests()
+
+
+def test_the_melody_is_downloaded_with_the_song(studio, library: Path) -> None:
+    studio.add(FIRST, pipeline_version=2, melody=True)
+
+    summary = run(library, studio)
+
+    assert summary.outcomes == [Outcome(FIRST, "added")]
+    assert_mirrors(library, studio, FIRST)
+    assert (library / FIRST / "melody.json").is_file()
+
+
+def test_a_melody_that_fails_its_hash_is_not_installed_and_comes_again(
+    studio, library: Path
+) -> None:
+    studio.add(FIRST, pipeline_version=2, melody=True)
+    good = studio.file(FIRST, "melody.json").read_bytes()
+    studio.file(FIRST, "melody.json").write_bytes(b'{"damaged": true}')
+
+    first = run(library, studio)
+
+    assert first.outcomes == [
+        Outcome(
+            FIRST,
+            "failed",
+            "melody.json does not match the sha256 of the manifest; "
+            "it is downloaded again on the next sync",
+        )
+    ]
+    assert [path.name for path in library.iterdir()] == [f".{FIRST}.partial"]
+    assert not (library / f".{FIRST}.partial" / "melody.json").exists()
+    studio.file(FIRST, "melody.json").write_bytes(good)
+    studio.requests.clear()
+
+    second = run(library, studio)
+
+    assert second.outcomes == [Outcome(FIRST, "added")]
+    assert_mirrors(library, studio, FIRST)
+    requested = [path for path, _ in studio.file_requests()]
+    assert f"/songs/{FIRST}/files/melody.json" in requested
+    assert not [path for path in requested if "/stems/" in path]
 
 
 def test_lyrics_are_not_hash_checked(studio, library: Path) -> None:

@@ -141,7 +141,8 @@ def upgrade_package(package: Package, analyze: Callable[[dict], dict]) -> None:
     with a manifest that changes only pipeline_version, melody and created_at.
     The old folder then moves to a trash name, the new one takes its place and
     the trash is removed. Busy when the old folder cannot move; if the new one
-    cannot take its place, the old one is put back.
+    cannot take its place, the old one is put back, and both stay when that
+    fails too.
     """
     folder, old = package.folder, package.manifest
     temp = _build_folder(folder.parent, folder.name)
@@ -173,18 +174,24 @@ def upgrade_package(package: Package, analyze: Callable[[dict], dict]) -> None:
     try:
         temp.rename(folder)
     except OSError as error:
-        shutil.rmtree(temp, ignore_errors=True)
-        _put_back(trash, folder, error)
+        _put_back(trash, temp, folder, error)
     shutil.rmtree(trash, ignore_errors=True)
 
 
-def _put_back(trash: Path, folder: Path, error: OSError) -> None:
-    """Rename the old version back after the new one failed to take its place."""
+def _put_back(trash: Path, temp: Path, folder: Path, error: OSError) -> None:
+    """Rename the old version back after the new one failed to take its place.
+
+    The new version is removed only once the old one is back: both folders have
+    the leftover shapes `studio serve` removes, so neither may be the last copy.
+    """
     try:
         trash.rename(folder)
     except OSError as restore_error:
         raise OSError(
-            f"{error}; the old version could not be put back ({restore_error}) "
-            f"and is kept in {trash.name}, which the next studio serve removes"
+            f"{error}; the old version could not be put back ({restore_error}); "
+            f"the new version is kept in {temp.name} and the old one in "
+            f"{trash.name}, and the next studio serve removes both, so rename "
+            f"{temp.name} to {folder.name} by hand before it"
         ) from error
+    shutil.rmtree(temp, ignore_errors=True)
     raise OSError(f"{error}; the old version stays") from error

@@ -274,7 +274,7 @@ def test_a_new_version_that_cannot_go_in_puts_the_old_one_back(
     assert list(elsewhere.iterdir()) == []
 
 
-def test_an_old_version_that_cannot_be_put_back_stays_in_its_trash_folder(
+def test_an_old_version_that_cannot_be_put_back_keeps_both_versions(
     library: Path, tools, capsys, monkeypatch
 ) -> None:
     older = make_package(library, "Song Title", "XXXXXXXXXXX")
@@ -285,15 +285,24 @@ def test_an_old_version_that_cannot_be_put_back_stays_in_its_trash_folder(
 
     assert code == 1
     line = capsys.readouterr().out.splitlines()[0]
-    (trash,) = [p for p in library.iterdir()]
-    assert trash.name.endswith(".deleting")
+    (build,) = library.glob("*.tmp")
+    (trash,) = library.glob("*.deleting")
+    assert len(list(library.iterdir())) == 2
     assert snapshot(trash) == before
-    assert line.startswith(f"failed   {older.name}: [Errno 5] Access is denied: '.")
-    assert line.endswith(
+    assert Manifest.load(build / "manifest.json").pipeline_version == 2
+    assert line == (
+        f"failed   {older.name}: [Errno 5] Access is denied: '{build.name}'; "
         f"the old version could not be put back ([Errno 5] Access is denied: "
-        f"'{trash.name}') and is kept in {trash.name}, which the next studio "
-        "serve removes"
+        f"'{trash.name}'); the new version is kept in {build.name} and the old "
+        f"one in {trash.name}, and the next studio serve removes both, so "
+        f"rename {build.name} to {older.name} by hand before it"
     )
+    # Doing what the line says leaves the new version in place.
+    monkeypatch.undo()
+    build.rename(library / older.name)
+    lib.remove_leftovers(library)
+    assert [p.name for p in library.iterdir()] == [older.name]
+    assert Manifest.load(older / "manifest.json").pipeline_version == 2
 
 
 def test_analyze_refuses_without_the_separation_extra(

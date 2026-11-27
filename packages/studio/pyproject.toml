@@ -18,6 +18,7 @@ separation = [
     "audio-separator[gpu]==0.48.0",
     # Not in the tree librosa 1.x resolves; the S2 environment the models were chosen in had it.
     "audioread",
+    "rmvpe-onnx==0.2.3",
     "torch",
     "yt-dlp[default]",
 ]

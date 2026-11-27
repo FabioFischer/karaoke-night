@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import urllib.error
 from pathlib import Path
@@ -26,9 +27,10 @@ SYNCED = {"syncedLyrics": "[00:01.00] Line one", "plainLyrics": "Line one"}
 class Recorder:
     """Fakes for every outside tool the command uses, with what each was called with."""
 
-    def __init__(self, mix: np.ndarray, separator, lyrics_routes=None):
+    def __init__(self, mix: np.ndarray, separator, analysis, lyrics_routes=None):
         self.mix = mix
         self.separator = separator
+        self.analysis = analysis
         self.lyrics_routes = lyrics_routes or {"/api/get": (200, SYNCED)}
         self.calls: list[tuple] = []
 
@@ -68,12 +70,14 @@ class Recorder:
             convert=self.convert,
             make_runner=self.make_runner,
             lyrics_get=self.lyrics_get,
+            track_pitch=self.analysis.track_pitch,
+            chroma=self.analysis.chroma,
         )
 
 
 @pytest.fixture
-def recorder(mix, fake_separator) -> Recorder:
-    return Recorder(mix, fake_separator())
+def recorder(mix, fake_separator, fake_analysis) -> Recorder:
+    return Recorder(mix, fake_separator(), fake_analysis)
 
 
 @pytest.fixture
@@ -116,6 +120,7 @@ def test_youtube_video_becomes_a_package(
     assert sorted(p.name for p in (library / expected_id).iterdir()) == [
         "lyrics.lrc",
         "manifest.json",
+        "melody.json",
         "stems",
     ]
     out = capsys.readouterr().out
@@ -123,6 +128,37 @@ def test_youtube_video_becomes_a_package(
     assert "null test: max abs error" in out
     assert "residual RMS" in out
     assert str(library / expected_id / "manifest.json") in out
+
+
+def test_the_package_carries_the_melody_of_its_lead(
+    tmp_path: Path, recorder: Recorder, capsys, melody_of
+) -> None:
+    code = run(recorder, VIDEO_ID, "--library", str(tmp_path))
+
+    assert code == 0
+    (package,) = tmp_path.iterdir()
+    manifest = Manifest.load(package / "manifest.json")
+    assert manifest.pipeline_version == 2
+    assert manifest.melody is not None
+    assert manifest.melody.sha256 == sha256_file(package / manifest.melody.file)
+    document = json.loads((package / "melody.json").read_bytes())
+    assert document == melody_of(manifest.duration_s)
+    lead, _ = sf.read(package / "stems" / "lead.flac", dtype="float32")
+    (track,) = [c for c in recorder.analysis.calls if c[0] == "track_pitch"]
+    np.testing.assert_allclose(track[1], lead.mean(axis=1), atol=1 / 2**15)
+    assert re.search(r"melody +\d+\.\d s  1 notes, 1 keys", capsys.readouterr().out)
+
+
+def test_a_failed_analysis_leaves_nothing_in_the_library(
+    tmp_path: Path, recorder: Recorder
+) -> None:
+    recorder.analysis.fail = RuntimeError("tracker crashed")
+    library = tmp_path / "library"
+
+    with pytest.raises(RuntimeError, match="tracker crashed"):
+        run(recorder, VIDEO_ID, "--library", str(library))
+
+    assert list(library.iterdir()) == []
 
 
 def test_null_test_of_the_written_package_is_rounding_only(
@@ -226,6 +262,20 @@ def test_failure_mid_way_leaves_nothing_in_the_library(
         run(recorder, VIDEO_ID, "--library", str(library))
 
     assert list(library.iterdir()) == []
+
+
+def test_missing_rmvpe_counts_as_a_missing_extra(
+    tmp_path: Path, recorder: Recorder, capsys
+) -> None:
+    recorder.find_spec = lambda name: None if name == "rmvpe_onnx" else object()
+
+    code = run(recorder, VIDEO_ID, "--library", str(tmp_path / "library"))
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "(rmvpe_onnx not installed)" in err
+    assert "uv sync --package studio --extra separation" in err
+    assert recorder.calls == []
 
 
 def test_missing_separation_extra_prints_the_install_hint(
@@ -342,6 +392,8 @@ def test_model_dir_reaches_the_runner(tmp_path: Path, recorder: Recorder) -> Non
     )
 
     assert ("make_runner", tmp_path / "models") in recorder.calls
+    (track,) = [c for c in recorder.analysis.calls if c[0] == "track_pitch"]
+    assert track[3] == tmp_path / "models"
 
 
 def test_model_dir_defaults_to_the_s2_cache_folder(

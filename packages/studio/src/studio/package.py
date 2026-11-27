@@ -1,6 +1,7 @@
 """The song package of docs/PLAN.md section 5.2, written to the library."""
 
 import hashlib
+import json
 import re
 import shutil
 import tempfile
@@ -11,13 +12,15 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from core.manifest import Lyrics, Manifest, Models, Source, Stem
+from core.manifest import Lyrics, Manifest, Melody, Models, Source, Stem
 
 from studio.audio import SAMPLE_RATE, to_pcm16
+from studio.library import Package, move_to_trash
 from studio.lyrics import FoundLyrics
 from studio.separation import STEMS
 
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
+MELODY_FILE = "melody.json"
 
 
 def slug(text: str) -> str:
@@ -46,6 +49,13 @@ def source_key(source: Source) -> str:
     return source.video_id if source.type == "youtube_music" else source.sha256
 
 
+def write_melody(out_dir: Path, document: dict) -> Melody:
+    """Write the melody document as the manifest is written: indent 2, utf-8, LF."""
+    path = out_dir / MELODY_FILE
+    path.write_bytes((json.dumps(document, indent=2) + "\n").encode("utf-8"))
+    return Melody(file=MELODY_FILE, sha256=sha256_file(path))
+
+
 def write_package(
     out_dir: Path,
     stems: dict[str, np.ndarray],
@@ -56,6 +66,7 @@ def write_package(
     gain_db: float,
     lyrics: FoundLyrics | None,
     models: dict[str, str],
+    melody: dict,
 ) -> Manifest:
     stems_dir = out_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
@@ -86,6 +97,7 @@ def write_package(
         gain_db=gain_db,
         stems=entries,
         lyrics=lyrics_entry,
+        melody=write_melody(out_dir, melody),
         models=Models(
             vocals=models["vocals"],
             karaoke=models["karaoke"],
@@ -106,7 +118,7 @@ def build_atomically(
     the library holds a finished package or none. On failure it is removed.
     """
     library.mkdir(parents=True, exist_ok=True)
-    temp = Path(tempfile.mkdtemp(prefix=f".{package_id}.", suffix=".tmp", dir=library))
+    temp = _build_folder(library, package_id)
     try:
         build(temp)
         final = library / package_id
@@ -115,3 +127,71 @@ def build_atomically(
         shutil.rmtree(temp, ignore_errors=True)
         raise
     return final
+
+
+def _build_folder(library: Path, package_id: str) -> Path:
+    """.<package_id>.<8 random>.tmp, a shape `studio serve` removes as a leftover."""
+    return Path(tempfile.mkdtemp(prefix=f".{package_id}.", suffix=".tmp", dir=library))
+
+
+def upgrade_package(package: Package, analyze: Callable[[dict], dict]) -> None:
+    """Give package the melody of PIPELINE_VERSION, swapped in whole.
+
+    The new version is built next to it from a copy of its stems and lyrics,
+    with a manifest that changes only pipeline_version, melody and created_at.
+    The old folder then moves to a trash name, the new one takes its place and
+    the trash is removed. Busy when the old folder cannot move; if the new one
+    cannot take its place, the old one is put back, and both stay when that
+    fails too.
+    """
+    folder, old = package.folder, package.manifest
+    temp = _build_folder(folder.parent, folder.name)
+    try:
+        copied = [stem.file for stem in old.stems.values()]
+        if old.lyrics is not None:
+            copied.append(old.lyrics.file)
+        for path in copied:
+            (temp / path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(folder / path, temp / path)
+        stems = {
+            name: sf.read(temp / stem.file, dtype="float32", always_2d=True)[0]
+            for name, stem in old.stems.items()
+        }
+        melody = write_melody(temp, analyze(stems))
+        del stems
+        changes = {
+            "pipeline_version": PIPELINE_VERSION,
+            "melody": melody,
+            "created_at": datetime.now(UTC),
+        }
+        Manifest.model_validate(old.model_dump() | changes).write(
+            temp / "manifest.json"
+        )
+        trash = move_to_trash(folder)
+    except BaseException:
+        shutil.rmtree(temp, ignore_errors=True)
+        raise
+    try:
+        temp.rename(folder)
+    except OSError as error:
+        _put_back(trash, temp, folder, error)
+    shutil.rmtree(trash, ignore_errors=True)
+
+
+def _put_back(trash: Path, temp: Path, folder: Path, error: OSError) -> None:
+    """Rename the old version back after the new one failed to take its place.
+
+    The new version is removed only once the old one is back: both folders have
+    the leftover shapes `studio serve` removes, so neither may be the last copy.
+    """
+    try:
+        trash.rename(folder)
+    except OSError as restore_error:
+        raise OSError(
+            f"{error}; the old version could not be put back ({restore_error}); "
+            f"the new version is kept in {temp.name} and the old one in "
+            f"{trash.name}, and the next studio serve removes both, so rename "
+            f"{temp.name} to {folder.name} by hand before it"
+        ) from error
+    shutil.rmtree(temp, ignore_errors=True)
+    raise OSError(f"{error}; the old version stays") from error

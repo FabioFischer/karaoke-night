@@ -10,6 +10,7 @@ from pydantic import ValidationError
 FIXTURES = Path(__file__).parent / "fixtures"
 WITH_LYRICS = FIXTURES / "manifest_with_lyrics.json"
 WITHOUT_LYRICS = FIXTURES / "manifest_without_lyrics.json"
+WITH_MELODY = FIXTURES / "manifest_with_melody.json"
 
 
 def manifest_data(path: Path = WITH_LYRICS) -> dict[str, Any]:
@@ -69,19 +70,32 @@ def test_lyrics_offset_defaults_to_zero() -> None:
 
 def test_unknown_fields_are_accepted_and_dropped() -> None:
     data = manifest_data()
-    data["melody"] = {"file": "melody.json"}
+    data["alignment"] = {"file": "alignment.json"}
     data["stems"]["lead"]["peak_dbfs"] = -0.3
     data["source"]["channel"] = "Artist Name"
 
     manifest = Manifest.model_validate(data)
     written = manifest.model_dump(mode="json", by_alias=True)
 
-    assert "melody" not in written
+    assert "alignment" not in written
     assert "peak_dbfs" not in written["stems"]["lead"]
     assert "channel" not in written["source"]
 
 
-@pytest.mark.parametrize("fixture", [WITH_LYRICS, WITHOUT_LYRICS])
+def test_melody_is_optional() -> None:
+    assert Manifest.model_validate(manifest_data()).melody is None
+
+
+def test_melody_holds_its_file_and_sha256() -> None:
+    manifest = Manifest.load(WITH_MELODY)
+
+    assert manifest.pipeline_version == 2
+    assert manifest.melody is not None
+    assert manifest.melody.file == "melody.json"
+    assert manifest.melody.sha256 == "7" * 64
+
+
+@pytest.mark.parametrize("fixture", [WITH_LYRICS, WITHOUT_LYRICS, WITH_MELODY])
 def test_round_trip_matches_the_s2_format(fixture: Path, tmp_path: Path) -> None:
     loaded = Manifest.load(fixture)
     out = tmp_path / "manifest.json"
@@ -315,6 +329,23 @@ def test_stem_file_with_dots_inside_a_name_is_accepted() -> None:
 def test_lyrics_file_outside_the_package_is_rejected(path: str) -> None:
     data = manifest_data()
     data["lyrics"]["file"] = path
+
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(data)
+
+
+@pytest.mark.parametrize("path", INVALID_PATHS)
+def test_melody_file_outside_the_package_is_rejected(path: str) -> None:
+    data = manifest_data(WITH_MELODY)
+    data["melody"]["file"] = path
+
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(data)
+
+
+def test_melody_with_an_invalid_sha256_is_rejected() -> None:
+    data = manifest_data(WITH_MELODY)
+    data["melody"]["sha256"] = "7" * 63
 
     with pytest.raises(ValidationError):
         Manifest.model_validate(data)

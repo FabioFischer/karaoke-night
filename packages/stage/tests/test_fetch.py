@@ -58,6 +58,21 @@ def test_fetch_reports_files_and_bytes_as_they_arrive(studio, library: Path) -> 
     assert len(seen) > 4
 
 
+def test_fetch_counts_the_melody_as_a_file(studio, library: Path) -> None:
+    studio.add(FIRST, pipeline_version=2, melody=True)
+    seen: list[Progress] = []
+
+    run(library, studio, FIRST, seen.append)
+
+    files = package_files(studio.library / FIRST)
+    file_bytes = sum(
+        len(data) for name, data in files.items() if name != "manifest.json"
+    )
+    # Two stems, the lyrics and the melody.
+    assert seen[0] == Progress(files_done=0, files_total=4, bytes_done=0)
+    assert seen[-1] == Progress(files_done=4, files_total=4, bytes_done=file_bytes)
+
+
 def test_fetch_counts_a_stem_already_whole_in_the_partial(
     studio, library: Path
 ) -> None:

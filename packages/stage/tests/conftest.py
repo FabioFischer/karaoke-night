@@ -45,6 +45,7 @@ class Studio:
         created_at: str = CREATED_AT,
         pipeline_version: int = 1,
         lyrics: bool = True,
+        melody: bool = False,
         extra: dict | None = None,
         folder: str | None = None,
     ) -> str:
@@ -79,6 +80,13 @@ class Studio:
                 "provider": "lrclib",
                 "file": "lyrics.lrc",
                 "synced": True,
+            }
+        if melody:
+            data = f'{{"notes": [], "keys": [], "made": "{created_at}"}}'.encode()
+            (package / "melody.json").write_bytes(data)
+            manifest["melody"] = {
+                "file": "melody.json",
+                "sha256": hashlib.sha256(data).hexdigest(),
             }
         (package / "manifest.json").write_bytes(
             json.dumps(manifest, indent=4).encode("utf-8")

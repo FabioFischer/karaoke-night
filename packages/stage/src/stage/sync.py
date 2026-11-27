@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
-from core.manifest import Manifest, Stem
+from core.manifest import Manifest, Melody, Stem
 from core.studio_api import SongSummary
 from pydantic import ValidationError
 
@@ -51,8 +51,8 @@ class Progress:
     """How far the download of one song got.
 
     The manifest has no file sizes, so the whole is counted in files (the
-    stems and the lyrics); bytes_done counts the bytes received so far, not
-    the ones a partial folder already held.
+    stems, the lyrics and the melody); bytes_done counts the bytes received so
+    far, not the ones a partial folder already held.
     """
 
     files_done: int
@@ -249,7 +249,10 @@ def _download(
         # As downloaded: writing it through the model would drop fields it does not know.
         (partial / "manifest.json").write_bytes(raw)
 
-    progress = Progress(0, len(manifest.stems) + (manifest.lyrics is not None), 0)
+    checked = list(manifest.stems.values())
+    if manifest.melody is not None:
+        checked.append(manifest.melody)
+    progress = Progress(0, len(checked) + (manifest.lyrics is not None), 0)
     on_progress(progress)
 
     def received(size: int) -> None:
@@ -264,11 +267,13 @@ def _download(
 
     errors = []
     unreachable = False
-    for stem in manifest.stems.values():
+    for entry in checked:
         try:
-            error = _download_stem(studio, song.id, partial, stem, summary, received)
+            error = _download_checked(
+                studio, song.id, partial, entry, summary, received
+            )
         except StudioError as failure:
-            error = f"{stem.file}: {failure}"
+            error = f"{entry.file}: {failure}"
             unreachable = unreachable or isinstance(failure, StudioUnreachable)
         if error is not None:
             errors.append(error)
@@ -288,26 +293,26 @@ def _download(
     return errors
 
 
-def _download_stem(
+def _download_checked(
     studio: StudioClient,
     song_id: str,
     partial: Path,
-    stem: Stem,
+    entry: Stem | Melody,
     summary: Summary,
     on_chunk: Callable[[int], None],
 ) -> str | None:
-    """Download one stem unless the partial already holds it whole.
+    """Download one file the manifest gives a sha256 unless the partial already holds it whole.
 
-    Returns None, or why the stem does not match; a StudioError propagates.
+    Returns None, or why the file does not match; a StudioError propagates.
     """
-    target = partial / stem.file
-    if target.is_file() and _sha256(target) == stem.sha256:
+    target = partial / entry.file
+    if target.is_file() and _sha256(target) == entry.sha256:
         return None
-    summary.bytes_downloaded += _fetch(studio, song_id, stem.file, target, on_chunk)
-    if _sha256(target) != stem.sha256:
+    summary.bytes_downloaded += _fetch(studio, song_id, entry.file, target, on_chunk)
+    if _sha256(target) != entry.sha256:
         target.unlink()
         return (
-            f"{stem.file} does not match the sha256 of the manifest; "
+            f"{entry.file} does not match the sha256 of the manifest; "
             "it is downloaded again on the next sync"
         )
     return None

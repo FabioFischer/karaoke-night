@@ -298,7 +298,7 @@ def test_songs_of_an_empty_library(client: TestClient) -> None:
 
 def test_manifest_is_served_as_stored(client: TestClient, library: Path) -> None:
     package = make_package(
-        library, "Song Title", "Artist Name", VIDEO_ID, extra={"melody": {"x": 1}}
+        library, "Song Title", "Artist Name", VIDEO_ID, extra={"alignment": {"x": 1}}
     )
     stored = (library / package / "manifest.json").read_bytes()
 
@@ -324,6 +324,40 @@ def test_manifest_files_are_served(client: TestClient, library: Path, path: str)
 
     assert response.status_code == 200
     assert response.content == (library / package / path).read_bytes()
+
+
+def test_the_melody_file_is_served(client: TestClient, library: Path) -> None:
+    melody = b'{"notes": [], "keys": []}'
+    package = make_package(
+        library,
+        "Song Title",
+        "Artist Name",
+        VIDEO_ID,
+        extra={
+            "pipeline_version": 2,
+            "melody": {
+                "file": "melody.json",
+                "sha256": hashlib.sha256(melody).hexdigest(),
+            },
+        },
+    )
+    (library / package / "melody.json").write_bytes(melody)
+
+    response = client.get(f"/songs/{package}/files/melody.json")
+
+    assert response.status_code == 200
+    assert response.content == melody
+
+
+def test_a_melody_file_the_manifest_does_not_list_is_404(
+    client: TestClient, library: Path
+) -> None:
+    package = make_package(library, "Song Title", "Artist Name", VIDEO_ID)
+    (library / package / "melody.json").write_bytes(b"{}")
+
+    response = client.get(f"/songs/{package}/files/melody.json")
+
+    assert response.status_code == 404
 
 
 @pytest.mark.parametrize(

@@ -34,13 +34,25 @@ The layout is in `docs/PLAN.md` §5.5. Python commands run from the repository r
 
 ### Studio pipeline
 
-The separation stack (audio-separator, CUDA 13.0 PyTorch, yt-dlp) is an optional extra of the `studio` package, installed only on the Studio machine. On the Studio, set up with `uv sync --package studio --extra separation`, never `uv sync --all-packages`, which is an exact sync and uninstalls the extra. Steps:
+The separation stack (audio-separator, CUDA 13.0 PyTorch, yt-dlp, and rmvpe-onnx for the melody) is an optional extra of the `studio` package, installed only on the Studio machine. On the Studio, set up with `uv sync --package studio --extra separation`, never `uv sync --all-packages`, which is an exact sync and uninstalls the extra. Steps:
 
 1. NVIDIA driver with CUDA 13.0 or later (`nvidia-smi`), `ffmpeg` and `deno` on `PATH` (deno solves YouTube's challenges for yt-dlp).
 2. `uv sync --package studio --extra separation` (more than 2 GB the first time).
-3. `uv run studio process <url|video_id|file> [--library DIR] [--model-dir DIR]`. A local file also needs `--title` and `--artist`. The default library is `library/` in the current folder, which git ignores. Models download on first use to `--model-dir` (default `~/.cache/audio-separator-models`); the `AUDIO_SEPARATOR_MODEL_DIR` environment variable wins over it, and that folder must exist.
+3. `uv run studio process <url|video_id|file> [--library DIR] [--model-dir DIR]`. A local file also needs `--title` and `--artist`. The default library is `library/` in the current folder, which git ignores. Models download on first use to `--model-dir` (default `~/.cache/audio-separator-models`); for audio-separator the `AUDIO_SEPARATOR_MODEL_DIR` environment variable wins over it, and that folder must exist. RMVPE's `rmvpe.onnx` (about 360 MB) is downloaded on first use into the Hugging Face cache (`~/.cache/huggingface/hub`, which `HF_HOME` or `HF_HUB_CACHE` move) and copied from there to `--model-dir`, so the disk holds two copies; later runs use the one in `--model-dir`, and the cached one can be deleted.
 
-The command prints each step's time and peak VRAM, then the null test (largest error and residual RMS of the stems against the mix). `uv run studio process --help` lists the options.
+The command prints each step's time and peak VRAM, the melody analysis (its seconds, notes and key sections), then the null test (largest error and residual RMS of the stems against the mix). `uv run studio process --help` lists the options. It writes packages of `pipeline_version` 2, with the melody (`docs/PLAN.md` §5.2).
+
+### Upgrading the library
+
+```powershell
+uv run studio analyze [SONG_ID ...] [--library DIR] [--model-dir DIR]
+```
+
+`studio analyze` gives packages already in the library the melody analysis, without separating again (`docs/PLAN.md` §5.2). With no song id it takes every package whose `pipeline_version` is below 2; with ids, those packages whatever their version. It needs the same setup as `studio process` and refuses to run without the separation extra. Each package is rebuilt in a `.<song_id>.<random>.tmp` folder and swapped in whole: its stems and lyrics stay byte for byte, and its manifest changes only in `pipeline_version`, `melody` and `created_at`.
+
+Update the Stage's code before analyzing the Studio library. A Stage on older code syncs an upgraded package without its `melody.json` but keeps the manifest that lists it, and once updated it sees the same `created_at` and `pipeline_version`, so it never downloads the melody.
+
+It prints one line per song, `analyzed <song_id>`, `busy <song_id>: <reason>` (a file of the song is open, so it stays as it is) or `failed <song_id>: <reason>` (an id not in the library, a failed analysis, or a new version that could not take the old one's place), then a summary line with the counts and the seconds taken. When the old version could not be put back either, the `failed` line names both folders, the new version in `.<song_id>.<random>.tmp` and the old one in `.<song_id>.<random>.deleting`: rename the `.tmp` one to `<song_id>` by hand before the next `studio serve`, which removes both. It exits with 1 if any song was busy or failed, 0 otherwise. Like `studio process`, never run it while a `studio serve` uses the same library (see Studio API below). `uv run studio analyze --help` lists the options.
 
 ### Studio API
 
@@ -53,7 +65,7 @@ uv run studio serve [--library DIR] [--model-dir DIR] [--host 0.0.0.0] [--port 8
 
 `--library` and `--model-dir` work as in `studio process`. Jobs run one at a time and are lost when the server stops; the packages stay in the library. `uv run studio serve --help` lists the options.
 
-On start, before it binds the port, `studio serve` removes the folders a stopped run left in the library: builds named `.<song_id>.<random>.tmp` and deletions named `.<song_id>.<random>.deleting`, where `<random>` is exactly 8 characters of `a-z`, `0-9` and `_`. It logs each folder it removes, and each one it could not fully remove. It cannot tell a leftover from a build still running, so never run two `studio serve`, or a `studio serve` and a `studio process`, on the same library at once: the build in flight is removed, even by a second `studio serve` that then fails to start because the port is in use.
+On start, before it binds the port, `studio serve` removes the folders a stopped run left in the library: builds named `.<song_id>.<random>.tmp` and deletions named `.<song_id>.<random>.deleting`, where `<random>` is exactly 8 characters of `a-z`, `0-9` and `_`. It logs each folder it removes, and each one it could not fully remove. It cannot tell a leftover from a build still running, so never run two `studio serve`, or a `studio serve` and a `studio process` or `studio analyze`, on the same library at once: the build in flight is removed, even by a second `studio serve` that then fails to start because the port is in use.
 
 The `studio.*` log lines of `studio serve` go to stderr with time and level, next to uvicorn's own lines.
 
@@ -67,7 +79,7 @@ uv run stage sync --studio http://<studio address>:8790 [--library DIR]
 uv run stage list [--library DIR]
 ```
 
-`stage sync` mirrors the Studio library: it downloads what is missing or reprocessed, resumes interrupted downloads from `.<song_id>.partial` folders, checks each stem's sha256, and removes what the Studio no longer lists. It refuses to run without `STUDIO_TOKEN`. It prints one line per song acted on (`added`, `updated`, `removed`, `busy`, `failed`) and a summary line, and exits with 1 if the Studio cannot be reached (nothing changes then) or any song failed. A song whose files are open (REAPER holding the loaded song) is reported `busy` and left whole. `stage list` needs no network and no token.
+`stage sync` mirrors the Studio library: it downloads what is missing or reprocessed, resumes interrupted downloads from `.<song_id>.partial` folders, checks the sha256 of each stem and of the melody, and removes what the Studio no longer lists. It refuses to run without `STUDIO_TOKEN`. It prints one line per song acted on (`added`, `updated`, `removed`, `busy`, `failed`) and a summary line, and exits with 1 if the Studio cannot be reached (nothing changes then) or any song failed. A song whose files are open (REAPER holding the loaded song) is reported `busy` and left whole. `stage list` needs no network and no token.
 
 ### Searching for a song
 

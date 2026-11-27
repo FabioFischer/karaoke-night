@@ -37,10 +37,12 @@ class Package:
     manifest: Manifest
 
     def files(self) -> set[str]:
-        """The paths the manifest lists: the stems and the lyrics."""
+        """The paths the manifest lists: the stems, the lyrics and the melody."""
         files = {stem.file for stem in self.manifest.stems.values()}
         if self.manifest.lyrics is not None:
             files.add(self.manifest.lyrics.file)
+        if self.manifest.melody is not None:
+            files.add(self.manifest.melody.file)
         return files
 
 
@@ -113,17 +115,20 @@ def find_video(library: Path, video_id: str) -> str | None:
     return None
 
 
-def delete(package: Package) -> None:
-    """Move the folder out of the listing, then remove it.
+def move_to_trash(folder: Path) -> Path:
+    """Rename folder out of the listing and return its new path.
 
     On Windows a folder holding an open file cannot be renamed, so a package
-    in use is left whole instead of half deleted.
+    in use is left whole instead of half deleted or half replaced.
     """
-    trash = package.folder.with_name(
-        f".{package.folder.name}.{uuid.uuid4().hex[:8]}.deleting"
-    )
+    trash = folder.with_name(f".{folder.name}.{uuid.uuid4().hex[:8]}.deleting")
     try:
-        package.folder.rename(trash)
+        folder.rename(trash)
     except PermissionError as error:
-        raise Busy(package.folder.name) from error
-    shutil.rmtree(trash, ignore_errors=True)
+        raise Busy(folder.name) from error
+    return trash
+
+
+def delete(package: Package) -> None:
+    """Move the folder out of the listing, then remove it."""
+    shutil.rmtree(move_to_trash(package.folder), ignore_errors=True)

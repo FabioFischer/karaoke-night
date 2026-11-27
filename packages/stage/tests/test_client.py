@@ -33,7 +33,7 @@ def test_songs_are_parsed_into_summaries(studio) -> None:
 
 
 def test_manifest_is_the_stored_bytes(studio) -> None:
-    studio.add(SONG, extra={"melody": {"notes": []}})
+    studio.add(SONG, extra={"alignment": {"words": []}})
 
     with studio.client() as client:
         raw = client.manifest(SONG)

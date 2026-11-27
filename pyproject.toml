@@ -1,6 +1,14 @@
 [tool.uv.workspace]
 members = ["packages/*"]
 
+[tool.uv]
+# rmvpe-onnx asks for onnxruntime (CPU), while audio-separator[gpu] brings
+# onnxruntime-gpu. Both install the same onnxruntime module and break each
+# other, so on Windows and Linux onnxruntime-gpu alone provides it.
+override-dependencies = [
+    "onnxruntime>=1.24; sys_platform != 'win32' and sys_platform != 'linux'",
+]
+
 [dependency-groups]
 dev = [
     "httpx2>=2.16.0",

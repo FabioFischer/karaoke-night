@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 import type { StageState } from '../api'
+import mascot from '../assets/mascot.png'
 import { EntryStatus } from '../components/EntryStatus'
 import { PlaylistItem } from '../components/PlaylistItem'
 import { SongFinder } from '../components/SongFinder'
@@ -26,8 +27,14 @@ function CurrentSong({ state }: { state: StageState }) {
   const entry = currentEntry(state)
   if (entry === null) {
     return (
-      <section className="current-song">
-        <p className="muted">{text.home.emptyPlaylist}</p>
+      <section className="empty-playlist">
+        <div className="mascot-card">
+          <img src={mascot} alt="" />
+        </div>
+        <div>
+          <p className="empty-playlist-title">{text.home.emptyPlaylist}</p>
+          <p className="muted">{text.home.emptyPlaylistHint}</p>
+        </div>
       </section>
     )
   }

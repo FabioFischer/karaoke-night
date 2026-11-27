@@ -18,6 +18,7 @@
   --warning: #ffb347;
   --error: #ff6b6b;
   --sung: #6f7890;
+  --mascot-orange: #ff5b00;
   --gutter: 1.25rem;
 }
 
@@ -227,6 +228,42 @@ button:disabled {
 
 .current-song .button-primary {
   margin-top: 0.8rem;
+}
+
+/* The empty playlist: the app's drawing on an orange card, beside the message. */
+.empty-playlist {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 2.5rem;
+  padding: 2rem 2.5rem;
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.mascot-card {
+  padding: 1.2rem 1.4rem;
+  border-radius: 1.4rem;
+  background: var(--mascot-orange);
+  transform: rotate(-4deg);
+  box-shadow: 0 0.6rem 1.2rem rgb(0 0 0 / 0.5);
+}
+
+.mascot-card img {
+  display: block;
+  height: 36svh;
+  width: auto;
+}
+
+.empty-playlist-title {
+  font-size: 1.8rem;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.empty-playlist .muted {
+  margin-top: 0.6rem;
+  font-size: 1.2rem;
 }
 
 .playlist {

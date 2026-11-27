@@ -67,7 +67,13 @@ export function PhoneScreen() {
 /** The song playing with its lyrics; otherwise the current song and the next one. */
 function NowTab({ state }: { state: PhoneState }) {
   const entry = currentEntry(state)
-  if (entry === null) return <p className="muted">{text.home.emptyPlaylist}</p>
+  if (entry === null) {
+    return (
+      <p className="muted">
+        {text.home.emptyPlaylist} {text.home.emptyPlaylistHint}
+      </p>
+    )
+  }
   if (state.session.state === 'playing') return <NowPlaying state={state} />
 
   const next = upcomingEntries(state)[0]
@@ -139,7 +145,11 @@ function QueueTab({ state }: { state: PhoneState }) {
         </div>
       )}
       {entries.length === 0 ? (
-        <p className="muted">{entry ? text.home.noUpcoming : text.home.emptyPlaylist}</p>
+        <p className="muted">
+          {entry
+            ? text.home.noUpcoming
+            : `${text.home.emptyPlaylist} ${text.home.emptyPlaylistHint}`}
+        </p>
       ) : (
         <ul className="playlist">
           {entries.map((item) => (

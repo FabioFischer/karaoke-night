@@ -123,6 +123,7 @@ library/<song_id>/
   manifest.json
   stems/lead.flac  backing.flac  drums.flac  bass.flac  guitar.flac  piano.flac  other.flac
   lyrics.lrc
+  melody.json
 ```
 
 `manifest.json` (schema 1). The pydantic model lives in `packages/core/src/core/manifest.py`:
@@ -130,7 +131,7 @@ library/<song_id>/
 ```json
 {
   "schema": 1,
-  "pipeline_version": 1,
+  "pipeline_version": 2,
   "id": "song-title--artist-name--a1b2c3",
   "title": "Song Title",
   "artist": "Artist Name",
@@ -142,16 +143,33 @@ library/<song_id>/
     "backing": { "file": "stems/backing.flac", "sha256": "…" }
   },
   "lyrics": { "provider": "lrclib", "file": "lyrics.lrc", "synced": true, "offset_ms": 0 },
+  "melody": { "file": "melody.json", "sha256": "…" },
   "models": { "vocals": "…", "karaoke": "…", "instrumental": "htdemucs_6s" },
   "created_at": "2026-11-04T20:00:00Z"
 }
 ```
 
+- **`pipeline_version`:** 1 for the packages of the alpha, 2 once a package has `melody`. `studio process` and the Studio API write 2; `studio analyze` brings a package of version 1 to 2 (below).
+
 - **`gain_db`:** the gain REAPER applies on playback. Today it holds the headroom compensation from S2 (see Clipping below). Whether it also brings every song to one loudness target is still open, and so is that target in LUFS.
 - **`source`:** where the audio came from, by `type`. `{"type": "youtube_music", "video_id": "…"}` for a YouTube Music video, and `{"type": "file", "sha256": "…"}` for a local audio file, with the sha256 of the file as given (before any conversion). Any other `type` is rejected.
 - **`lyrics`:** optional. It is absent when LRCLIB has no lyrics for the song or the song is instrumental.
+- **`melody`:** optional in the model, present from `pipeline_version` 2: the file of the lead melody and the key per section (§3, Melody and key), with its sha256 like a stem. `melody.json` is utf-8 with LF line endings, written like the manifest:
+
+  ```json
+  {
+    "notes": [{ "start_s": 12.34, "end_s": 12.9, "midi": 64.18 }],
+    "keys":  [{ "start_s": 0.0, "end_s": 203.0, "tonic": "A", "mode": "minor" }]
+  }
+  ```
+
+  - `notes`: the notes RMVPE found on the lead stem, in time order. `midi` is the note's median pitch as a MIDI number with 2 decimals, not rounded to a semitone, so the recording's tuning stays; consumers round it. A note where nobody sings can come from residue in the lead stem (S6), and a song with no voice has no notes.
+  - `keys`: the key sections, back to back from 0 to the end of the song. `tonic` is one of `C`, `C#`, `D`, `D#`, `E`, `F`, `F#`, `G`, `G#`, `A`, `A#`, `B`; `mode` is `major` or `minor`.
+  - Times are in seconds from the start of the stems, with 3 decimals.
+  - The S6 settings: RMVPE threshold 0.03 on a 10 ms grid, notes split against a pitch smoothed over 190 ms when it moves more than 0.7 semitones, key windows of 16 s every 2 s, melody and instrumental chroma weighted half each, a switch cost of 6. The instrumental is drums, bass, guitar, piano and other.
+- **`studio analyze`** gives packages of an older `pipeline_version` the melody, without separating again: it builds the new version in a build folder (`.<song_id>.<random>.tmp`, §5.3) from a copy of the stems and the lyrics, writes `melody.json` and a manifest that changes only `pipeline_version`, `melody` and `created_at` (a new date, so the Stage downloads the song again, §5.6), then swaps it in as the Stage installs an update: the old folder is renamed to a trash name (`.<song_id>.<random>.deleting`), the new one takes its place and the trash is removed. If the new one cannot take its place, the old one is renamed back. A package whose folder cannot be renamed (a file open on Windows) is reported `busy` and stays whole.
 - **Unknown fields are ignored**, not rejected, so an older Stage keeps reading a manifest that a newer `pipeline_version` wrote (for example one that adds melody data). They are also dropped on write: a Stage that loads and then writes a newer manifest loses those fields. Note for A5: the Stage library must account for this, for example by keeping the downloaded `manifest.json` as is.
-- **Paths stay inside the package:** every `file` (stems and lyrics) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.
+- **Paths stay inside the package:** every `file` (stems, lyrics and melody) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.
 - **`sha256`:** exactly 64 lowercase hex characters, the hex digest of the file.
 - **No required stem set:** the model accepts any stem names and any number of stems.
 - **`gain_db` and `duration_s`** must be finite numbers: NaN and infinity are rejected.
@@ -168,17 +186,17 @@ FastAPI, started with `studio serve` (`--host` defaults to `0.0.0.0`, `--port` t
 | `GET` | `/jobs/{job_id}` | `{job_id, song_id, status, step, attempt, retry_at, error}`. 404 for an unknown job. |
 | `GET` | `/songs` | Master library listing, one `{id, title, artist, duration_s, pipeline_version, created_at}` per package. The Stage mirrors it: it downloads what is missing and removes what is no longer listed. |
 | `GET` | `/songs/{song_id}/manifest` | The `manifest.json` bytes as stored on disk, not written back through the model (which would drop unknown fields, §5.2). |
-| `GET` | `/songs/{song_id}/files/{path}` | A file the manifest lists (a stem or the lyrics); any other path, or a listed file missing on disk, is 404. Supports `Range`, so downloads can resume. |
+| `GET` | `/songs/{song_id}/files/{path}` | A file the manifest lists (a stem, the lyrics or the melody); any other path, or a listed file missing on disk, is 404. Supports `Range`, so downloads can resume. |
 | `DELETE` | `/songs/{song_id}` | Deletes a song from the master library: 204, or 404 for an unknown song. The Stage removes it on the next sync. |
 | `DELETE` | `/songs` | Deletes the whole master library and returns `{deleted: [...], busy: [...]}`. |
 
-- **Statuses:** `queued → downloading → separating → lyrics → packaging → done`, or `failed`. `step` is set only while `separating`: `vocals`, `karaoke` or `instruments`. `attempt` counts the runs started so far (0 while a new job waits its turn).
+- **Statuses:** `queued → downloading → separating → lyrics → packaging → done`, or `failed`. `packaging` includes the melody analysis (§5.2), which has no status of its own. `step` is set only while `separating`: `vocals`, `karaoke` or `instruments`. `attempt` counts the runs started so far (0 while a new job waits its turn).
 - **Queue:** in memory, one job at a time, since the GPU takes one song at a time. Jobs are lost when the Studio restarts; the library stays the source of truth.
 - **Retries:** only a failure while downloading is tried again, up to 3 times, after 2, 10 and 30 minutes. While it waits, the job is `queued` with `retry_at` set and `error` holding the last error, until the next attempt starts and clears both, and the jobs behind it run in the meantime. After the last retry fails, or after a failure in any later stage, the job is `failed`.
 - **One job per video:** if a package from the same `video_id` is already in the library, `POST /jobs` returns a job that is already `done`, with that package's id, whatever title it was given. If a job for that `video_id` is queued, waiting for a retry or running, it returns that job. A failed job does not count.
 - **Only library ids:** routes that take a `song_id` act only on the ids of the library listing, never on a path built from the URL, so nothing outside the library can be reached. Folders starting with `.` (builds and deletions in flight), folders without a `manifest.json` and folders whose `manifest.json` the model rejects (logged as a warning, once until the file changes) are not listed, so one broken package does not take the rest of the library down.
 - **Deleting:** the package folder is first renamed to a name starting with `.`, then removed. On Windows a folder holding an open file cannot be renamed, so `DELETE /songs/{song_id}` answers 409 and the package stays whole; `DELETE /songs` lists it under `busy`.
-- **Leftovers:** a server stopped mid job leaves its build folder (`.<song_id>.<random>.tmp`), and a removal that could not finish leaves its trash folder (`.<song_id>.<random>.deleting`), where `<random>` is exactly 8 characters of `a-z`, `0-9` and `_`. `studio serve` removes the folders of exactly those two shapes from the library when it starts, before it binds the port, and logs each one it removes or could not fully remove; nothing else is touched. Accepted cost: it cannot tell a leftover from a build still running, so two `studio serve`, or a `studio serve` and a `studio process`, must never run on the same library at once. A second `studio serve` removes the first one's build in flight even when it then fails to start because the port is in use.
+- **Leftovers:** a server stopped mid job leaves its build folder (`.<song_id>.<random>.tmp`), and a removal that could not finish leaves its trash folder (`.<song_id>.<random>.deleting`), where `<random>` is exactly 8 characters of `a-z`, `0-9` and `_`. `studio serve` removes the folders of exactly those two shapes from the library when it starts, before it binds the port, and logs each one it removes or could not fully remove; nothing else is touched. Accepted cost: it cannot tell a leftover from a build still running, so two `studio serve`, or a `studio serve` and a `studio process` or `studio analyze`, must never run on the same library at once. A second `studio serve` removes the first one's build in flight even when it then fails to start because the port is in use.
 
 ### 5.4 Stage ↔ REAPER
 
@@ -245,7 +263,8 @@ The folder is the library: one package per folder, named by its song id, as in �
 
 - **What a sync does:** a song the Studio lists and the Stage lacks is downloaded; one the Stage holds with a different `created_at` or `pipeline_version` is downloaded again (a reprocessed song keeps its id and gets a new `created_at`); one the Stage holds and the Studio no longer lists is removed. There is no guard on an empty or shrunk listing: an empty listing empties the Stage.
 - **Downloads** go into `<library>/.<song_id>.partial/`, one file after the other over one kept-alive connection, and survive between runs. The downloaded manifest is kept there, and a later sync resumes from it while it still matches the listing (`created_at` and `pipeline_version`); otherwise the partial is discarded and the song starts over. A file already partly on disk is resumed with `Range: bytes=<size>-`: a 206 is appended, a 200 rewrites the file from zero, and a 416 (nothing left to send) asks for the whole file again.
-- **Hash checks:** each stem is checked against its manifest `sha256` after its download, and a stem already whole in the partial is not fetched again. A stem that does not match is deleted, the song is not installed in that sync and is reported as failed, and the next sync downloads that stem again. Lyrics have no hash in the manifest, so they are downloaded without a check.
+- **Hash checks:** each stem, and the melody (§5.2), is checked against its manifest `sha256` after its download, and one already whole in the partial is not fetched again. A file that does not match is deleted, the song is not installed in that sync and is reported as failed, and the next sync downloads that file again. Lyrics have no hash in the manifest, so they are downloaded without a check. The progress of a download counts the melody as one more file.
+- **After `studio analyze`:** an upgraded song has a new `created_at` and `pipeline_version`, so the next sync downloads it again whole, its unchanged stems included.
 - **Install:** a new song is renamed from its partial to `<song_id>`. An update renames the old folder to a trash name, renames the new one in, then removes the old one, so the old version is replaced only once the new one is complete. If the new one cannot be renamed in, the old one is renamed back and the song is reported as failed; the complete partial is kept, so a later sync installs it. If the old one cannot be renamed back either, the song is missing until the next sync, which removes the trash folder and installs the partial.
 - **Busy:** on Windows a folder holding an open file cannot be renamed, and REAPER keeps the stems of the loaded song open. A song that cannot be removed stays whole; on an update the old version stays in place and the complete partial is kept, so a later sync installs it. Both are reported as busy.
 - **Song ids:** an id from the Studio becomes a folder name the Stage creates and deletes, so only the shape the Studio generates is accepted: slugs of `a-z`, `0-9` and `-` joined by `--`, then 6 hex digits (`song-title--artist-name--a1b2c3`). A song listed under any other id is skipped with a warning, and nothing is written or deleted under that id, not even a local folder of the same name.
@@ -628,7 +647,7 @@ Next, as separate rounds: the analysis of each song (pipeline version 2, items 2
 Proposed order of the items:
 
 1. **Two microphones:** each mic gets a role (lead or backing), and the role decides which original vocal stems are muted.
-2. **Lyrics and melody analysis** on the Studio. Together they become `pipeline_version` 2, and the library is reprocessed.
+2. **Lyrics and melody analysis** on the Studio. The melody comes first, as `pipeline_version` 2, and `studio analyze` brings the library to it without separating again (§5.2); the lyrics alignment comes in a later version.
    - Lyrics split into lead and backing, with WhisperX alignment.
    - Melody: pitch tracking on the lead stem gives the expected notes and the key per section. Backing gets the same only when it holds a single harmony line; several voices at once aren't reliable. The tracker is RMVPE, from S6.
 3. **Pitch correction guided by the song:** when it loads a song, the Lua listener writes a guide MIDI track with the expected notes and a key automation, both already transposed. Whether the pitch correction plugin uses them stays a choice made in REAPER. Target notes must allow singing an octave up or down.

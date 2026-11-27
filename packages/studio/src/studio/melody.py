@@ -297,9 +297,9 @@ def analyze(
 
 def rmvpe_track(mono: np.ndarray, rate: int, model_dir: Path):
     """RMVPE on the CPU, as in S6; downloads rmvpe.onnx into model_dir on first use."""
-    from rmvpe_onnx import RMVPE, ensure_model
+    from rmvpe_onnx import RMVPE
 
-    model = RMVPE(ensure_model(model_dir / RMVPE_MODEL), device="cpu")
+    model = RMVPE(model_dir / RMVPE_MODEL, device="cpu")
     times, frequency, confidence, _ = model.predict(mono.astype(np.float32), rate)
     return times, frequency, confidence
 

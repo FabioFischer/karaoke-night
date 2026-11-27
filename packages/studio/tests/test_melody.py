@@ -1,5 +1,9 @@
 """The melody analysis on synthetic curves, with the tracker and the chroma faked."""
 
+import inspect
+import sys
+import types
+
 import numpy as np
 import pytest
 from studio import melody
@@ -253,6 +257,20 @@ def test_keys_with_the_s6_defaults_still_find_the_change() -> None:
     assert set(sections[0]) == {"start_s", "end_s", "tonic", "mode"}
 
 
+def test_a_note_counts_for_the_key_by_its_nearest_semitone() -> None:
+    # An E major triad sung 40 cents flat: 63.6 is E, not D#.
+    notes = [
+        {"start_s": 0.0, "end_s": 1.0, "midi": 63.6},
+        {"start_s": 1.0, "end_s": 2.0, "midi": 67.6},
+        {"start_s": 2.0, "end_s": 3.0, "midi": 70.6},
+    ]
+    times = np.arange(30) / 10
+
+    sections = melody.detect_keys(np.zeros((12, 30)), times, notes, 3.0)
+
+    assert [(s["tonic"], s["mode"]) for s in sections] == [("E", "major")]
+
+
 def test_a_song_shorter_than_a_window_gets_one_key() -> None:
     times = np.arange(50) / 10
     chroma = np.full((12, 50), 0.05)
@@ -355,6 +373,65 @@ def test_frames_under_the_rmvpe_threshold_are_unvoiced() -> None:
 
     assert document["notes"] == []
     assert [(k["tonic"], k["mode"]) for k in document["keys"]] == [("G", "major")]
+
+
+def test_the_analysis_keeps_the_s6_settings() -> None:
+    # docs/PLAN.md section 5.2 and the S6 results: a change here is a new
+    # analysis, judged by ear again, not a refactor.
+    def defaults(function):
+        return {
+            name: parameter.default
+            for name, parameter in inspect.signature(function).parameters.items()
+            if parameter.default is not inspect.Parameter.empty
+        }
+
+    assert melody.RMVPE_THRESHOLD == 0.03
+    assert melody.GRID_HOP == 0.01
+    assert defaults(melody.segment_notes) == {
+        "min_confidence": 0.0,
+        "smooth_frames": 19,
+        "split_semitones": 0.7,
+        "split_frames": 3,
+        "max_gap_s": 0.03,
+        "min_note_s": 0.08,
+    }
+    assert defaults(melody.detect_keys) == {
+        "window_s": 16.0,
+        "hop_s": 2.0,
+        "melody_weight": 0.5,
+        "switch_penalty": 6.0,
+    }
+
+
+def test_rmvpe_gets_the_model_path_and_checks_the_model_itself(
+    monkeypatch, tmp_path
+) -> None:
+    # RMVPE's constructor downloads the model when missing and hashes it
+    # (rmvpe_onnx 0.2.3), so calling ensure_model too would hash it twice.
+    made: list[tuple] = []
+
+    class FakeRMVPE:
+        def __init__(self, model_path, device=None):
+            made.append((model_path, device))
+
+        def predict(self, audio, rate):
+            times = np.arange(3) * HOP
+            return times, np.full(3, 220.0), np.full(3, 0.9), None
+
+    def ensure_model(model_path=None):
+        raise AssertionError("ensure_model hashes the model a second time")
+
+    fake = types.ModuleType("rmvpe_onnx")
+    fake.RMVPE, fake.ensure_model = FakeRMVPE, ensure_model
+    monkeypatch.setitem(sys.modules, "rmvpe_onnx", fake)
+
+    times, frequency, confidence = melody.rmvpe_track(
+        np.zeros(SAMPLE_RATE), SAMPLE_RATE, tmp_path
+    )
+
+    assert made == [(tmp_path / "rmvpe.onnx", "cpu")]
+    np.testing.assert_allclose(frequency, 220.0)
+    assert len(times) == len(confidence) == 3
 
 
 def test_the_document_holds_plain_python_numbers() -> None:

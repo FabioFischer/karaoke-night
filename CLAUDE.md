@@ -120,9 +120,9 @@ None of them has a test harness: they are proven by parsing and in a live run.
 
 ### Public page on Vercel
 
-The public page of an event (`docs/PLAN.md` §5.9) is a Vercel project whose root directory is `web/`; `web/vercel.json` sets its build and routes. `npm run build:public` (`vite build --mode public`) builds only the phone's page, `web/public.html` with `src/public/`, into `web/dist-public`: one route, `/karaoke`, with the tabs *Agora*, *Fila* and *Buscar*. The operator's screens are not in it. `npm run build` stays the Stage's own build, served by `stage serve`.
+The public page (`docs/PLAN.md` §5.9) is a Vercel project whose root directory is `web/`; `web/vercel.json` sets its build and routes. `npm run build:public` (`vite build --mode public`) builds only the phone's page, `web/public.html` with `src/public/`, into `web/dist-public`: one route, `/karaoke`, with the tabs *Agora*, *Fila* and *Buscar*. The operator's screens are not in it. `npm run build` stays the Stage's own build, served by `stage serve`.
 
-The functions are the files of `web/api/public/` (Node runtime, Web standard handlers); `web/server/` holds what they share, outside `api/` so it is not a function, and `web/server/store.ts` is the only code that reads the store's credentials, `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN` (the Upstash REST URL and token, the same names the Stage uses). They are set by hand in the Vercel project's Production environment only, so a preview never touches an event, and never committed. `tsc -b` checks the functions with `tsconfig.api.json`; their relative imports name the `.js` file, as Node ESM needs.
+The functions are the files of `web/api/public/` (Node runtime, Web standard handlers); `web/server/` holds what they share, outside `api/` so it is not a function, and `web/server/store.ts` is the only code that reads the store's credentials, `KARAOKE_STORE_URL` and `KARAOKE_STORE_TOKEN` (the Upstash REST URL and token, the same names the Stage uses). They are set by hand in the Vercel project's Production environment only, so a preview never touches the live page, and never committed. `tsc -b` checks the functions with `tsconfig.api.json`; their relative imports name the `.js` file, as Node ESM needs.
 
 `npm test` runs Vitest on `web/test/`, in Node, with no DOM and no network:
 

@@ -3,8 +3,8 @@
 Stops the Studio API of this clone and removes its firewall rule.
 
 .DESCRIPTION
-Run on the Studio in an administrator PowerShell, by hand or over SSH, after an
-event. It stops every process of this clone's studio serve (the PowerShell
+Run on the Studio in an administrator PowerShell, by hand or over SSH, after a
+night. It stops every process of this clone's studio serve (the PowerShell
 wrapper scripts\studio-start.ps1 started, studio.exe and its Python processes),
 found by this clone's own studio.exe path on their command lines, then removes
 the firewall rule karaoke-studio. Prints nothing when neither is there.

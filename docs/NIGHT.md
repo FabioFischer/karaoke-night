@@ -1,6 +1,6 @@
 # Karaoke night: runbook
 
-What to do before, during and after a night, with the scripts in `scripts/`. The roles are those of `docs/PLAN.md` §3: the **Studio** processes new songs, the **Stage** plays them at the venue. The commands below assume the clone is at `C:\path\to\karaoke-night` on both machines; replace it with the real path.
+What to do before, during and after a night, with the scripts in `scripts/`. The roles are those of `docs/PLAN.md` §3: the **Studio** processes new songs, the **Stage** plays them where people sing. The commands below assume the clone is at `C:\path\to\karaoke-night` on both machines; replace it with the real path.
 
 Windows does not run `.ps1` files by default, so each script runs as `powershell -NoProfile -ExecutionPolicy Bypass -File <script> ...`, which works in PowerShell, in `cmd` and over SSH.
 
@@ -13,7 +13,7 @@ The public page (`docs/PLAN.md` §5.9) needs the public store's Upstash REST URL
 On the **Studio**, in an administrator PowerShell or over SSH:
 
 1. Update the clone (`git pull`) and its environment: `uv sync --package studio --extra separation`, never `uv sync --all-packages` (`CLAUDE.md`, Studio pipeline).
-2. Start the Studio API for the event:
+2. Start the Studio API for the night:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\karaoke-night\scripts\studio-start.ps1 -TokenFile C:\path\to\studio-token.txt
@@ -50,13 +50,13 @@ On the **Stage**, in a PowerShell in the clone:
 
    Without `-Studio` and `-TokenFile`, the night still runs, with the songs of the library only. Without `-StoreFile`, it runs without the public page: the `stage serve` window then says `stage serve: no public store (...)`.
 
-## At the venue
+## On the Stage
 
 1. Go through the setup checklist of [`reaper/README.md`](../reaper/README.md#setup-checklist) before opening anything: the audio interface straight into the machine, the Windows sample rate matching REAPER's, a single monitoring path, the machine plugged in.
 2. Bring Tailscale up on the Stage and check that it reaches the Studio (`tailscale status`). New songs need it; the library does not.
 3. Open the shortcut. It opens REAPER with the session (a REAPER already running is left as it is, with the session it has open), starts `stage serve` in its own window, waits until it answers, and opens the browser in full screen at `/karaoke`. F11 leaves full screen. If something fails, the shortcut's window says what and waits for Enter.
 4. Mirror the Stage's screen to the TV (`Windows + P`, *Duplicate*).
-5. **Measure once:** the download of a new song on the venue's network, still open from S5 (`docs/PLAN.md` §6). Add a song that is not in the library, and time its entry from the start of `fetching` (the download to the Stage) to `ready`; note the size of its package folder in the library. Record both in the A9 results of `docs/PLAN.md`.
+5. **Measure once:** the download of a new song on a network other than the home one, still open from S5 (`docs/PLAN.md` §6). Add a song that is not in the library, and time its entry from the start of `fetching` (the download to the Stage) to `ready`; note the size of its package folder in the library. Record both in the S5 results of `docs/PLAN.md`.
 
 ## During
 
@@ -64,7 +64,7 @@ On the **Stage**, in a PowerShell in the clone:
 - A new song needs the Studio up and reachable: `studio serve` running and Tailscale connected on both machines. Songs in the library play without either.
 - The playlist lives in `stage serve`'s memory: closing its window stops the server and empties the playlist.
 - If the screen says the karaoke script in REAPER did not answer, restart REAPER (`reaper/README.md`, How the bridge works).
-- The public page follows the Stage only while `stage serve` runs and the venue has internet. When the store does not answer, the `stage serve` window shows `warning: the public store failed (...)` once, and `warning: the public store answers again` when it is back; playback and the TV are not affected. Requests left on the public page while `stage serve` was closed are discarded when it starts again.
+- The public page follows the Stage only while `stage serve` runs and the Stage has internet. When the store does not answer, the `stage serve` window shows `warning: the public store failed (...)` once, and `warning: the public store answers again` when it is back; playback and the TV are not affected. Requests left on the public page while `stage serve` was closed are discarded when it starts again.
 
 ## After
 

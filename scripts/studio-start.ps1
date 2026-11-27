@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Starts the Studio API for an event: the firewall rule, then studio serve, detached.
+Starts the Studio API for a night: the firewall rule, then studio serve, detached.
 
 .DESCRIPTION
 Run on the Studio in an administrator PowerShell, by hand or over SSH. It creates

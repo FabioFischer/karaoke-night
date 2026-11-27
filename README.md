@@ -2,12 +2,12 @@
 
 Self-hosted karaoke that plays the **original recordings**, not re-recorded backing tracks. Songs are split into stems with AI source separation, singers choose which stems to keep, and live vocals run through a real effects chain in [REAPER](https://www.reaper.fm).
 
-> **Status:** the alpha (Phase 1) is built and waits for its first full night at the venue. The beta (Phase 2) has started: pause, volumes, reordering and the pre-performance excerpt are done.
+> **Status:** the alpha (Phase 1) is done, but for a check with someone who has never used the app. The beta (Phase 2) has started: pause, volumes, reordering and the pre-performance excerpt are done.
 
 ## How it works
 
 - **Studio:** a GPU machine that finds a song, downloads the audio and splits it into stems (lead vocals, backing vocals, drums, bass, guitar, piano, other). It also fetches synced lyrics and packages everything.
-- **Stage:** the machine at the venue. It runs REAPER with the microphones and effects, shows search and lyrics on a TV, and plays songs from its local library. Once songs are synced, it works offline.
+- **Stage:** the machine where people sing. It runs REAPER with the microphones and effects, shows search and lyrics on a TV, and plays songs from its local library. Once songs are synced, it works offline.
 - **Public page:** a page on Vercel where guests follow the playlist and the lyrics on their phones, and search and add songs. The Stage publishes its state there and applies the guests' requests; nothing on the internet connects to the Stage or the Studio.
 
 ```

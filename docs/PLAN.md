@@ -4,7 +4,7 @@
 
 ## Status
 
-*Last updated: 2026-11-22*
+*Last updated: 2026-11-27*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) built, its first full night at the venue (A9) left. Phase 2 (beta) started.
 - **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 rounds 1 and 2 (round 2 with a native ASIO interface: 64 samples is the working buffer), S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the venue's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only during an event, and the public page lives on Vercel, fed by a snapshot the Stage publishes. Milestone A10 (public access, §5.9, results in §6 Phase 1). Milestone B1, the first of the beta (pause, volumes and reordering, §6 Phase 2). Milestone B2 (the pre-performance, results in §6 Phase 2).
@@ -271,6 +271,7 @@ Every screen shares one **playlist**: the songs lined up for the night, in order
 - With a playlist: the song playing, or the current one, with a prominent button to go to Stage mode. The upcoming songs sit in a side panel on the right, with reorder, remove and the processing state of each. While no song plays (the setup), the current song is listed there too, so a song that failed can be taken off.
 - Search on YouTube: the user types a text and gets the first results, about 10. Each shows the full title, the thumbnail, a button to hear a random excerpt of the original recording (not processed) and a button to add it to the playlist.
 - Library: the songs already downloaded, with the same options as the search results.
+- With an empty playlist: the app's drawing on an orange card, beside the message to search for a song. The phone shows only the message. The browser tab and the phone's home screen shortcut carry the drawing's face as the icon (a provisional version, until a simplified one for small sizes).
 
 **Stage mode (`/karaoke/stage`), before the song starts**
 
@@ -610,6 +611,7 @@ The beta's screens are in §5.7; the items below fill them in (the results repor
 |---|---|---|
 | B1 | Stage screen controls (§5.7, §5.8, §5.9): pause and resume, music and voice volumes on the TV (in the setup and while the song plays), and reordering the playlist on the TV and on the phone. Two PRs: B1a, the Stage side; B1b, the web (TV, phone and the public function). | At home, live: a song paused and resumed with the lyrics stopping and going on, on the TV and on a phone; both volumes changed by ear; the playlist reordered from the TV and from a phone on a mobile network. |
 | B2 | The pre-performance, item 4 below (§5.4, §5.7, §5.8): the excerpt of the song in the setup, with its lyrics on the TV. One PR, Stage and web. | At home, live: the excerpt starts at the right place with its lyrics following it; a key change and a stem muted during it are heard at once; it stops alone after 20 s and stays in the setup; *Começar* in the middle of it plays the song from its start; removing the song in the middle of it stops it; a phone shows nothing of it. |
+| B3 | Layout review of the current screens (§5.7, §5.9): a pass over the CSS of the TV's three screens and the phone's page, for spacing, sizes, alignment and how each screen reads from a distance. It includes the *Buscar* and *Biblioteca* tabs on the TV, which the CSS stacks one above the other (`.finder > div` sets every div of the finder to grid, the tab bar included, over `.tabs`). Only CSS and markup, no change of behavior. One PR. | At home, the maintainer goes through every screen on the TV and on a phone, in each state (empty playlist, setup, excerpt, playing, paused, results), and approves the layout. |
 
 **B1: done.** Checked live at home by the maintainer after both PRs merged; the details of that check were not recorded.
 
@@ -622,7 +624,7 @@ The beta's screens are in §5.7; the items below fill them in (the results repor
 - **Removed mid excerpt:** the song left the setup within a second of its excerpt starting, and the next one was set up.
 - **Phone:** nothing of the excerpt showed on the public page (by eye).
 
-Next, as separate rounds: the analysis of each song (pipeline version 2, items 2 and 3 below), and the second microphone (item 1), which the interface of S1 round 2 now allows. Stems toggled while the song plays and the QR code on the TV are left for later.
+Next, as separate rounds: the analysis of each song (pipeline version 2, items 2 and 3 below), the second microphone (item 1), which the interface of S1 round 2 now allows, and the layout review (B3). Stems toggled while the song plays and the QR code on the TV are left for later.
 
 Proposed order of the items:
 

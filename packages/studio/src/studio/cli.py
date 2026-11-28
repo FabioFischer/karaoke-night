@@ -77,6 +77,7 @@ class Tools:
     lyrics_get: Callable = field(default_factory=_paced_lrclib)
     serve: Callable[..., None] = _run_server
     track_pitch: Callable[[np.ndarray, int, Path], tuple] = melody.rmvpe_track
+    extract_notes: Callable[[np.ndarray, int, Path], list] = melody.some_notes
     chroma: Callable[[np.ndarray, int], tuple] = melody.instrumental_chroma
 
 
@@ -102,7 +103,7 @@ def _add_folder_options(command: argparse.ArgumentParser) -> None:
         "--model-dir",
         type=Path,
         default=DEFAULT_MODEL_DIR,
-        help="where audio-separator and RMVPE download and cache models "
+        help="where audio-separator, RMVPE and SOME download and cache models "
         "(default: ~/.cache/audio-separator-models); for audio-separator, the "
         "AUDIO_SEPARATOR_MODEL_DIR environment variable wins over it, and that "
         "folder must exist",
@@ -480,10 +481,18 @@ def analyze_stems(
     stems: dict[str, np.ndarray], model_dir: Path, tools: Tools, report: dict
 ) -> dict:
     """The melody document of the stems; report gets its seconds and counts."""
+
+    def split(mono: np.ndarray, rate: int) -> list:
+        start = time.perf_counter()
+        chunks = tools.extract_notes(mono, rate, model_dir)
+        report["some_seconds"] = _seconds_since(start)
+        return chunks
+
     start = time.perf_counter()
     document = melody.analyze(
         stems,
         lambda mono, rate: tools.track_pitch(mono, rate, model_dir),
+        split,
         tools.chroma,
     )
     report["melody_seconds"] = _seconds_since(start)
@@ -540,6 +549,7 @@ def _print_report(report: dict) -> None:
     print(f"{'lyrics':<12} {report['lyrics_seconds']:>8.1f} s  {found}")
     print(
         f"{'melody':<12} {report['melody_seconds']:>8.1f} s  "
+        f"SOME {report['some_seconds']:.1f} s  "
         f"{report['melody_notes']} notes, {report['melody_keys']} keys"
     )
     print(f"{'write':<12} {report['write_seconds']:>8.1f} s")

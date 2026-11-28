@@ -62,8 +62,8 @@ class FakeSeparator:
 
 
 class FakeAnalysis:
-    """Stands in for RMVPE and librosa's chroma: the lead holds G4 (392 Hz)
-    all along, over a G major triad.
+    """Stands in for RMVPE, SOME and librosa's chroma: the lead holds G4
+    (392 Hz) all along, as one note, over a G major triad.
 
     calls records what each was called with; fail, when set, is raised by
     track_pitch.
@@ -80,6 +80,17 @@ class FakeAnalysis:
         times = np.arange(int(len(mono) / rate / 0.01)) * 0.01
         return times, np.full(len(times), 392.0), np.full(len(times), 0.5)
 
+    def extract_notes(self, mono: np.ndarray, rate: int, model_dir):
+        self.calls.append(("extract_notes", mono.copy(), rate, model_dir))
+        return [
+            {
+                "offset": 0,
+                "note_midi": np.array([67.0]),
+                "note_dur": np.array([len(mono) / rate]),
+                "note_rest": np.array([False]),
+            }
+        ]
+
     def chroma(self, mono: np.ndarray, rate: int):
         self.calls.append(("chroma", mono.copy(), rate))
         times = np.arange(int(len(mono) / rate * 10)) / 10
@@ -91,7 +102,7 @@ class FakeAnalysis:
 def fake_melody(seconds: float) -> dict:
     """The melody.json document FakeAnalysis gives for stems of that length."""
     return {
-        "notes": [{"start_s": 0.0, "end_s": seconds, "midi": 67.0}],
+        "notes": [{"start_s": 0.0, "end_s": seconds, "midi": 67}],
         "keys": [{"start_s": 0.0, "end_s": seconds, "tonic": "G", "mode": "major"}],
     }
 
@@ -154,6 +165,7 @@ class FakeTools:
             make_runner=self.make_runner,
             lyrics_get=self.lyrics_get,
             track_pitch=self.analysis.track_pitch,
+            extract_notes=self.analysis.extract_notes,
             chroma=self.analysis.chroma,
         )
 

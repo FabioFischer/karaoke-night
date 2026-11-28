@@ -46,12 +46,13 @@ def make_package(
         melody={"notes": [], "keys": []},
     )
     update = {
+        "pipeline_version": pipeline_version,
         "created_at": OLD,
         "lyrics": manifest.lyrics.model_copy(update={"offset_ms": 250}),
     }
     if pipeline_version == 1:
         (folder / "melody.json").unlink()
-        update |= {"pipeline_version": 1, "melody": None}
+        update["melody"] = None
     manifest.model_copy(update=update).write(folder / "manifest.json")
     return folder
 
@@ -100,8 +101,8 @@ def test_every_package_of_an_older_version_is_analyzed(
     library: Path, fake_tools, tools, capsys, melody_of
 ) -> None:
     first = make_package(library, "Song Title", "XXXXXXXXXXX")
-    second = make_package(library, "Other Title", "YYYYYYYYYYY")
-    current = make_package(library, "Third Title", "ZZZZZZZZZZZ", pipeline_version=2)
+    second = make_package(library, "Other Title", "YYYYYYYYYYY", pipeline_version=2)
+    current = make_package(library, "Third Title", "ZZZZZZZZZZZ", pipeline_version=3)
     before = {folder.name: snapshot(folder) for folder in (first, second, current)}
     old = Manifest.load(first / "manifest.json")
 
@@ -117,10 +118,10 @@ def test_every_package_of_an_older_version_is_analyzed(
     for folder in (first, second):
         after = snapshot(folder)
         for path, data in before[folder.name].items():
-            if path != "manifest.json":
+            if path not in ("manifest.json", "melody.json"):
                 assert after[path] == data, path
         manifest = Manifest.load(folder / "manifest.json")
-        assert manifest.pipeline_version == 2
+        assert manifest.pipeline_version == 3
         assert manifest.created_at > OLD
         assert manifest.melody is not None
         assert manifest.melody.file == "melody.json"
@@ -131,14 +132,15 @@ def test_every_package_of_an_older_version_is_analyzed(
     unchanged = {"pipeline_version", "melody", "created_at"}
     assert manifest.model_dump(exclude=unchanged) == old.model_dump(exclude=unchanged)
     assert manifest.lyrics.offset_ms == 250
-    tracked = [c for c in fake_tools.analysis.calls if c[0] == "track_pitch"]
-    assert [call[3] for call in tracked] == [Path("models"), Path("models")]
+    for name in ("track_pitch", "extract_notes"):
+        calls = [c for c in fake_tools.analysis.calls if c[0] == name]
+        assert [call[3] for call in calls] == [Path("models"), Path("models")]
 
 
 def test_ids_given_are_analyzed_whatever_their_version(
     library: Path, tools, capsys, melody_of
 ) -> None:
-    current = make_package(library, "Song Title", "XXXXXXXXXXX", pipeline_version=2)
+    current = make_package(library, "Song Title", "XXXXXXXXXXX", pipeline_version=3)
     older = make_package(library, "Other Title", "YYYYYYYYYYY")
     untouched = snapshot(older)
 
@@ -168,7 +170,7 @@ def test_an_unknown_id_fails_and_the_others_go_on(library: Path, tools, capsys) 
 def test_nothing_to_analyze_prints_only_the_summary(
     library: Path, tools, capsys
 ) -> None:
-    make_package(library, "Song Title", "XXXXXXXXXXX", pipeline_version=2)
+    make_package(library, "Song Title", "XXXXXXXXXXX", pipeline_version=3)
 
     code = run(tools, library)
 
@@ -289,7 +291,7 @@ def test_an_old_version_that_cannot_be_put_back_keeps_both_versions(
     (trash,) = library.glob("*.deleting")
     assert len(list(library.iterdir())) == 2
     assert snapshot(trash) == before
-    assert Manifest.load(build / "manifest.json").pipeline_version == 2
+    assert Manifest.load(build / "manifest.json").pipeline_version == 3
     assert line == (
         f"failed   {older.name}: [Errno 5] Access is denied: '{build.name}'; "
         f"the old version could not be put back ([Errno 5] Access is denied: "
@@ -302,7 +304,7 @@ def test_an_old_version_that_cannot_be_put_back_keeps_both_versions(
     build.rename(library / older.name)
     lib.remove_leftovers(library)
     assert [p.name for p in library.iterdir()] == [older.name]
-    assert Manifest.load(older / "manifest.json").pipeline_version == 2
+    assert Manifest.load(older / "manifest.json").pipeline_version == 3
 
 
 def test_analyze_refuses_without_the_separation_extra(

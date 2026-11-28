@@ -43,7 +43,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Storage | In the alpha the Stage library is the folder of packages on disk, with no database. SQLite comes with the play history. | No infrastructure to run, and nothing to keep in step with the folders until there is data that is not in them. |
 | Microphones | The REAPER template ships with 2 mic tracks from day one. | The beta needs two singers, and this avoids rebuilding the template. |
 | Vocal effects | The effects chain is free and controlled by hand in REAPER on the Stage (for example pitch correction, reverb, delay, compression, doubling). The app never picks plugins. In the beta it only provides data that the chain may use (§6, Phase 2). | Effects need room to evolve, and REAPER is the right place to tune them. |
-| Melody and key | RMVPE (`rmvpe-onnx`, on the CPU) on the lead stem, grouped into notes; key per section from the notes plus the instrumental's chroma, with Krumhansl-Kessler profiles over 16 s windows and a Viterbi smoothing. Chosen in S6. | Got the octave right where the other trackers jumped up on a strong held note, fewest chromatic artifacts, and about 0.5 s per minute of song. |
+| Melody and key | On the lead stem, both on the CPU: SOME (inference vendored from [openvpi/SOME](https://github.com/openvpi/SOME)) finds where each note starts and ends, and RMVPE (`rmvpe-onnx`) gives its pitch, the median of the note's middle frames. The key per section comes from those pitches plus the instrumental's chroma, with Krumhansl-Kessler profiles over 16 s windows and a Viterbi smoothing. Each note then takes its nearest semitone, or, when that semitone is outside the key of its section, the scale note on the side the voice is on. RMVPE and the keys were chosen in S6; SOME and the key snap in the note tuning round of beta item 2. | RMVPE got the octave right where the other trackers jumped up on a strong held note, with the fewest chromatic artifacts. Grouping its curve into notes transcribed every pitch change the voice made (§6 Phase 2, item 2); SOME's notes were measured against UltraStar charts on 3 songs and approved by ear. |
 | Pitch correction | Alpha: chromatic mode (snap to the nearest semitone), which needs no song data. Beta: per-section key or target notes, from the melody analysis. | A fixed key sounds wrong in songs that change key. |
 | Key change | Chosen at setup only. The key stays fixed while the song plays. | Simpler, and enough for singing. |
 | Library sync | The Studio is the source of truth. The Stage mirrors the whole Studio library: it downloads what is missing and removes what the Studio no longer lists. Deleting a song means deleting it on the Studio. | Simple, and a song deleted by hand doesn't come back on the next sync. Disk use gets revisited if it becomes a problem. |
@@ -52,7 +52,8 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Public access | While the Stage runs, anyone with the link opens `/karaoke` on Vercel to add songs to the playlist, remove any song not playing and follow the lyrics. The Stage stays the owner of the state: it publishes a snapshot to a store on Vercel and reads the requests the public leaves there (§5.9). Nothing from the internet reaches the Stage, and no code is needed in the link. | The Stage keeps working offline, the number of phones does not load the machine playing the audio, and a malformed request is only something the Stage discards. |
 | Web screens | Three routes around one shared playlist: `/karaoke` (home), `/karaoke/stage` (setup and the song playing) and `/karaoke/stage/results` (§5.7). This is the beta's target; the alpha screens use the same routes and grow into it. A product version would be redesigned. | The beta's flow is known now, so the alpha screens don't have to be rewritten for it. |
 | Workflow | One PR per milestone. | Small, reviewable changes. |
-| License | MIT, to be revisited if the app matures into a product. | Simple and permissive, and every dependency is permissive too. |
+| License | MIT, to be revisited if the app matures into a product. | Simple and permissive, and every dependency's code is permissive too (for the model weights, see the next row). |
+| Model weights | SOME's model, which splits the melody into notes, is CC BY-NC-SA 4.0: non commercial, share alike. It downloads on first use and is never committed; SOME's code, vendored in `packages/studio/src/studio/some/`, is MIT. To be revisited with the license above if the app becomes a product. | It is the note splitter that passed by ear, and a personal, non commercial project may use it. |
 
 ## 4. Architecture principles
 
@@ -132,7 +133,7 @@ library/<song_id>/
 ```json
 {
   "schema": 1,
-  "pipeline_version": 2,
+  "pipeline_version": 3,
   "id": "song-title--artist-name--a1b2c3",
   "title": "Song Title",
   "artist": "Artist Name",
@@ -150,7 +151,7 @@ library/<song_id>/
 }
 ```
 
-- **`pipeline_version`:** 1 for the packages of the alpha, 2 once a package has `melody`. `studio process` and the Studio API write 2; `studio analyze` brings a package of version 1 to 2 (below).
+- **`pipeline_version`:** 1 for the packages of the alpha, 2 once a package has `melody`, 3 once its notes come from SOME and are snapped to the key. `studio process` and the Studio API write 3; `studio analyze` brings a package of version 1 or 2 to 3 (below).
 
 - **`gain_db`:** the gain REAPER applies on playback. Today it holds the headroom compensation from S2 (see Clipping below). Whether it also brings every song to one loudness target is still open, and so is that target in LUFS.
 - **`source`:** where the audio came from, by `type`. `{"type": "youtube_music", "video_id": "…"}` for a YouTube Music video, and `{"type": "file", "sha256": "…"}` for a local audio file, with the sha256 of the file as given (before any conversion). Any other `type` is rejected.
@@ -159,15 +160,15 @@ library/<song_id>/
 
   ```json
   {
-    "notes": [{ "start_s": 12.34, "end_s": 12.9, "midi": 64.18 }],
+    "notes": [{ "start_s": 12.34, "end_s": 12.9, "midi": 64 }],
     "keys":  [{ "start_s": 0.0, "end_s": 203.0, "tonic": "A", "mode": "minor" }]
   }
   ```
 
-  - `notes`: the notes RMVPE found on the lead stem, in time order. `midi` is the note's median pitch as a MIDI number with 2 decimals, not rounded to a semitone, so the recording's tuning stays; consumers round it. A note where nobody sings can come from residue in the lead stem (S6), and a song with no voice has no notes.
+  - `notes`: the notes of the lead stem, in time order. SOME gives where each starts and ends. `midi` is the semitone sung, a whole MIDI number: RMVPE's median pitch over the note without its first and last 20% (all of it for a note of 4 frames or fewer), rounded to the nearest semitone; when that semitone is outside the key of the section the note starts in, the note takes the semitone on the other side of the median, the scale note the voice is closer to. A note in which RMVPE hears no voice is dropped. A note where nobody sings can come from residue in the lead stem (S6), and a song with no voice has no notes. In a package of version 2, `midi` is the median itself, with 2 decimals.
   - `keys`: the key sections, back to back from 0 to the end of the song. `tonic` is one of `C`, `C#`, `D`, `D#`, `E`, `F`, `F#`, `G`, `G#`, `A`, `A#`, `B`; `mode` is `major` or `minor`.
   - Times are in seconds from the start of the stems, with 3 decimals.
-  - The S6 settings: RMVPE threshold 0.03 on a 10 ms grid, notes split against a pitch smoothed over 190 ms when it moves more than 0.7 semitones, key windows of 16 s every 2 s, melody and instrumental chroma weighted half each, a switch cost of 6. The instrumental is drums, bass, guitar, piano and other.
+  - The settings: SOME's `0119_continuous256_5spk` model on the lead stem cut at its silences as SOME's own `infer.py` cuts it (silences kept up to 1 s), RMVPE threshold 0.03 on a 10 ms grid, 20% trimmed from each end of a note for its pitch, the major and natural minor scales for the key snap; from S6, key windows of 16 s every 2 s, melody and instrumental chroma weighted half each, a switch cost of 6. The instrumental is drums, bass, guitar, piano and other.
 - **`studio analyze`** gives packages of an older `pipeline_version` the melody, without separating again: it builds the new version in a build folder (`.<song_id>.<random>.tmp`, §5.3) from a copy of the stems and the lyrics, writes `melody.json` and a manifest that changes only `pipeline_version`, `melody` and `created_at` (a new date, so the Stage downloads the song again, §5.6), then swaps it in as the Stage installs an update: the old folder is renamed to a trash name (`.<song_id>.<random>.deleting`), the new one takes its place and the trash is removed. If the new one cannot take its place, the old one is renamed back, and only then is the build folder removed. If the old one cannot be renamed back either, both folders stay and the `failed` line names them: the operator renames the build folder to `<song_id>` by hand before the next `studio serve`, which removes both shapes (§5.3, Leftovers). A package whose folder cannot be renamed (a file open on Windows) is reported `busy` and stays whole.
 - **Unknown fields are ignored**, not rejected, so an older Stage keeps reading a manifest that a newer `pipeline_version` wrote (for example one that adds melody data). They are also dropped on write: a Stage that loads and then writes a newer manifest loses those fields. Note for A5: the Stage library must account for this, for example by keeping the downloaded `manifest.json` as is.
 - **Paths stay inside the package:** every `file` (stems, lyrics and melody) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.
@@ -243,7 +244,7 @@ karaoke-night/
 ├─ pyproject.toml               # uv workspace
 ├─ packages/
 │  ├─ core/                     # shared models (manifest, contracts), lightweight
-│  ├─ studio/                   # Studio: jobs, download, separation, lyrics (torch, audio-separator)
+│  ├─ studio/                   # Studio: jobs, download, separation, lyrics, melody (torch, audio-separator, vendored SOME)
 │  └─ stage/                    # Stage: local server, library, REAPER bridge, session
 ├─ web/                         # React + Vite + TS: TV screens, and the public phone page (§5.9)
 │  ├─ api/public/               # Vercel functions of the public page

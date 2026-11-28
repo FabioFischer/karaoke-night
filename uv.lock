@@ -2345,9 +2345,12 @@ dependencies = [
 separation = [
     { name = "audio-separator", extra = ["gpu"] },
     { name = "audioread" },
+    { name = "einops" },
+    { name = "pyyaml" },
     { name = "rmvpe-onnx" },
     { name = "torch", version = "2.14.1+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "tqdm" },
     { name = "yt-dlp", extra = ["default"] },
 ]
 
@@ -2356,13 +2359,16 @@ requires-dist = [
     { name = "audio-separator", extras = ["gpu"], marker = "extra == 'separation'", specifier = "==0.48.0" },
     { name = "audioread", marker = "extra == 'separation'" },
     { name = "core", editable = "packages/core" },
+    { name = "einops", marker = "extra == 'separation'" },
     { name = "fastapi", specifier = ">=0.162.6" },
     { name = "numpy" },
+    { name = "pyyaml", marker = "extra == 'separation'" },
     { name = "rmvpe-onnx", marker = "extra == 'separation'", specifier = "==0.2.3" },
     { name = "soundfile" },
     { name = "starlette", specifier = ">=0.49.1" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'separation') or (sys_platform == 'win32' and extra == 'separation')", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torch", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'separation'" },
+    { name = "tqdm", marker = "extra == 'separation'" },
     { name = "uvicorn", specifier = ">=0.54.0" },
     { name = "yt-dlp", extras = ["default"], marker = "extra == 'separation'" },
 ]

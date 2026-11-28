@@ -124,6 +124,22 @@ def test_a_note_takes_the_median_of_its_middle_frames() -> None:
     assert melody.note_value(midi, 0.10, 0.15) == 12.0
 
 
+def test_the_trim_rounds_down_to_whole_frames() -> None:
+    midi = np.full(100, np.nan)
+    # 8 frames: 20% is 1.6 frames, so 1 is trimmed from each end, not 2.
+    midi[10:18] = [0.0, 70.0, 60.0, 61.0, 62.0, 63.0, 70.0, 0.0]
+
+    assert melody.note_value(midi, 0.10, 0.18) == 62.5
+
+
+def test_a_note_takes_the_median_not_the_mean() -> None:
+    midi = np.full(100, np.nan)
+    # One frame an octave up: the median stays on the note, the mean would be 63.
+    midi[10:14] = [60.0, 60.0, 60.0, 72.0]
+
+    assert melody.note_value(midi, 0.10, 0.14) == 60.0
+
+
 def test_a_note_of_4_frames_or_fewer_keeps_them_all() -> None:
     midi = np.arange(100, dtype=float)
 
@@ -412,6 +428,23 @@ def test_keys_come_from_the_pitches_before_the_snap(monkeypatch) -> None:
         ],
         "keys": g_major,
     }
+
+
+def test_a_note_across_a_key_change_snaps_to_the_key_at_its_start(
+    monkeypatch,
+) -> None:
+    # The note runs from 0.5 s to 1.5 s, the key changes at 1.0 s. C# is out of
+    # C major, so the voice above it goes up to D; in D major it stays C#.
+    keys = [
+        {"start_s": 0.0, "end_s": 1.0, "tonic": "C", "mode": "major"},
+        {"start_s": 1.0, "end_s": 2.0, "tonic": "D", "mode": "major"},
+    ]
+    monkeypatch.setattr(melody, "detect_keys", lambda *args: keys)
+    tracker = FakeTracker(((0.5, 1.5, 61.3),))
+
+    document = melody.analyze(make_stems(), tracker, FakeSome(), FakeChroma())
+
+    assert document["notes"] == [{"start_s": 0.5, "end_s": 1.5, "midi": 62}]
 
 
 def test_note_times_keep_3_decimals() -> None:

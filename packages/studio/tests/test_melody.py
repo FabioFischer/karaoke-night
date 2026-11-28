@@ -1,8 +1,11 @@
-"""The melody analysis on synthetic curves, with the tracker and the chroma faked."""
+"""The melody analysis on synthetic data, with RMVPE, SOME and the chroma faked."""
 
 import inspect
+import io
 import sys
 import types
+import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,26 +15,6 @@ from studio.audio import SAMPLE_RATE
 HOP = melody.GRID_HOP
 # I, IV, V, I of a major key, as semitones above the tonic.
 PROGRESSION = ((0, 4, 7), (5, 9, 0), (7, 11, 2), (0, 4, 7))
-
-
-def f0_curve(segments, seconds, vibrato_hz=5.5):
-    """A 10 ms f0 curve (Hz, NaN unvoiced) from (onset_s, duration_s, midi, vibrato_cents)."""
-    times = np.arange(round(seconds / HOP)) * HOP
-    midi = np.full(len(times), np.nan)
-    for onset, duration, pitch, vibrato in segments:
-        mask = (times >= onset - 1e-9) & (times < onset + duration - 1e-9)
-        midi[mask] = pitch + vibrato / 100 * np.sin(
-            2 * np.pi * vibrato_hz * (times[mask] - onset)
-        )
-    return times, melody.midi_to_hz(midi)
-
-
-def notes_of(times, f0):
-    return melody.segment_notes(times, f0, np.where(np.isnan(f0), 0.0, 0.9))
-
-
-def pitches(notes):
-    return [round(note["midi"]) for note in notes]
 
 
 def progression(tonic, start, end, chord_s=2.0):
@@ -104,89 +87,115 @@ def test_unvoiced_source_frames_stay_unvoiced() -> None:
 # Notes ---------------------------------------------------------------------
 
 
-def test_notes_with_gaps_vibrato_and_a_blip() -> None:
-    segments = [
-        (0.50, 0.60, 60, 40),  # vibrato +-40 cents stays one note
-        (1.10, 0.40, 62, 0),  # legato step up, no gap
-        (1.70, 0.30, 64.2, 0),  # 20 cents sharp
-        (2.20, 0.04, 70, 0),  # shorter than the minimum note: dropped
-        (2.50, 0.50, 59, 25),
+def chunk(offset, durations, rests):
+    """One chunk as SOME's inference gives it, its note_midi left to RMVPE."""
+    return {
+        "offset": offset,
+        "note_midi": np.full(len(durations), 60.0),
+        "note_dur": np.array(durations, dtype=float),
+        "note_rest": np.array(rests, dtype=bool),
+    }
+
+
+def test_notes_walk_each_chunk_from_its_offset_skipping_rests() -> None:
+    chunks = [
+        chunk(1.0, [0.25, 0.5, 0.125], [False, True, False]),
+        chunk(4.0, [0.5], [False]),
+        chunk(6.0, [0.75], [True]),
     ]
-    times, f0 = f0_curve(segments, 3.5)
-    # A 20 ms dropout inside the first note is bridged, not a new note.
-    f0[(times >= 0.80) & (times < 0.82)] = np.nan
 
-    notes = notes_of(times, f0)
-
-    assert pitches(notes) == [60, 62, 64, 59]
-    kept = [segment for segment in segments if segment[1] > 0.1]
-    for note, (onset, duration, _, _) in zip(notes, kept, strict=True):
-        assert note["start_s"] == pytest.approx(onset, abs=HOP / 2)
-        assert note["end_s"] == pytest.approx(onset + duration, abs=HOP / 2)
-    assert notes[2]["midi"] == pytest.approx(64.2, abs=0.03)
+    assert melody.notes_from_chunks(chunks) == [
+        (1.0, 1.25),
+        (1.75, 1.875),
+        (4.0, 4.5),
+    ]
 
 
-def test_a_note_keeps_its_median_pitch_rounded_to_2_decimals() -> None:
-    times, f0 = f0_curve([(0.2, 0.5, 60.123456, 0)], 1.0)
-
-    (note,) = notes_of(times, f0)
-
-    assert note["midi"] == 60.12
-    assert set(note) == {"start_s", "end_s", "midi"}
-    assert note["start_s"] == round(note["start_s"], 3)
-    assert note["end_s"] == round(note["end_s"], 3)
+def test_no_chunk_gives_no_notes() -> None:
+    assert melody.notes_from_chunks([]) == []
 
 
-@pytest.mark.parametrize("cents", [60, 80])
-@pytest.mark.parametrize("rate", [5.0, 5.5, 6.0])
-def test_wide_vibrato_stays_one_note(cents: int, rate: float) -> None:
-    times, f0 = f0_curve([(0.2, 1.5, 60, cents)], 2.0, vibrato_hz=rate)
+def test_a_note_takes_the_median_of_its_middle_frames() -> None:
+    midi = np.arange(100, dtype=float)  # frame i holds the value i
 
-    notes = notes_of(times, f0)
-
-    assert pitches(notes) == [60]
-    assert notes[0]["start_s"] == pytest.approx(0.2, abs=HOP / 2)
-    assert notes[0]["end_s"] == pytest.approx(1.7, abs=HOP / 2)
+    # Frames 10 to 29, 4 trimmed from each end: 14 to 25.
+    assert melody.note_value(midi, 0.10, 0.30) == 19.5
+    # 5 frames, 1 trimmed from each end: 11 to 13.
+    assert melody.note_value(midi, 0.10, 0.15) == 12.0
 
 
-@pytest.mark.parametrize("cents", [0, 60])
-def test_a_held_step_with_vibrato_splits_at_the_step(cents: int) -> None:
-    times, f0 = f0_curve([(0.2, 0.6, 60, cents), (0.8, 0.6, 62, cents)], 1.6)
+def test_the_trim_rounds_down_to_whole_frames() -> None:
+    midi = np.full(100, np.nan)
+    # 8 frames: 20% is 1.6 frames, so 1 is trimmed from each end, not 2.
+    midi[10:18] = [0.0, 70.0, 60.0, 61.0, 62.0, 63.0, 70.0, 0.0]
 
-    notes = notes_of(times, f0)
-
-    assert pitches(notes) == [60, 62]
-    assert notes[0]["end_s"] == pytest.approx(0.8, abs=HOP / 2)
-    assert notes[1]["start_s"] == pytest.approx(0.8, abs=HOP / 2)
+    assert melody.note_value(midi, 0.10, 0.18) == 62.5
 
 
-def test_a_quick_slide_between_two_held_notes_gives_the_two_notes() -> None:
-    # 4 semitones in 200 ms. Slower slides keep notes on the pitches passed (S6).
-    times = np.arange(160) * HOP
-    midi = np.where(times >= 0.2 - 1e-9, 60.0, np.nan)
-    glide = (times >= 0.7 - 1e-9) & (times < 0.9 - 1e-9)
-    midi[glide] = 60 + 4 * (times[glide] - 0.7 + HOP) / 0.2
-    midi[times >= 0.9 - 1e-9] = 64.0
+def test_a_note_takes_the_median_not_the_mean() -> None:
+    midi = np.full(100, np.nan)
+    # One frame an octave up: the median stays on the note, the mean would be 63.
+    midi[10:14] = [60.0, 60.0, 60.0, 72.0]
 
-    notes = notes_of(times, melody.midi_to_hz(midi))
-
-    assert pitches(notes) == [60, 64]
+    assert melody.note_value(midi, 0.10, 0.14) == 60.0
 
 
-def test_low_confidence_frames_are_dropped() -> None:
-    times, f0 = f0_curve([(0.0, 1.0, 60, 0)], 1.0)
-    confidence = np.where(times < 0.5, 0.9, 0.0)
+def test_a_note_of_4_frames_or_fewer_keeps_them_all() -> None:
+    midi = np.arange(100, dtype=float)
 
-    notes = melody.segment_notes(times, f0, confidence, min_confidence=0.5)
-
-    assert len(notes) == 1
-    assert notes[0]["end_s"] == pytest.approx(0.5, abs=0.02)
+    assert melody.note_value(midi, 0.10, 0.14) == 11.5
+    assert melody.note_value(midi, 0.10, 0.11) == 10.0
 
 
-def test_no_voiced_frame_gives_no_notes() -> None:
-    times = np.arange(100) * HOP
+def test_unvoiced_frames_do_not_count_for_the_pitch() -> None:
+    midi = np.arange(100, dtype=float)
+    midi[14:18] = np.nan
 
-    assert melody.segment_notes(times, np.full(100, np.nan), np.zeros(100)) == []
+    assert melody.note_value(midi, 0.10, 0.30) == 21.5
+
+
+def test_a_note_without_a_voiced_frame_has_no_pitch() -> None:
+    midi = np.full(100, np.nan)
+
+    assert melody.note_value(midi, 0.10, 0.30) is None
+    assert melody.note_value(np.arange(10, dtype=float), 0.5, 0.7) is None
+
+
+C_MAJOR = {"start_s": 0.0, "end_s": 10.0, "tonic": "C", "mode": "major"}
+A_MINOR = {"start_s": 0.0, "end_s": 10.0, "tonic": "A", "mode": "minor"}
+
+
+@pytest.mark.parametrize(
+    ("value", "key", "expected"),
+    [
+        (64.4, C_MAJOR, 64),  # E, in the key: the nearest semitone
+        (61.3, C_MAJOR, 62),  # C# is out, the voice is above it: up to D
+        (60.7, C_MAJOR, 60),  # C# is out, the voice is below it: down to C
+        (68.2, A_MINOR, 69),  # G# is out of A minor: up to A
+        (67.6, A_MINOR, 67),  # G# is out of A minor: down to G
+        (69.0, A_MINOR, 69),
+        (61.0, C_MAJOR, 61),  # exactly on C#: the ceiling of 61.0 is 61
+    ],
+)
+def test_a_pitch_outside_the_key_goes_to_the_side_the_voice_is_on(
+    value: float, key: dict, expected: int
+) -> None:
+    pitch = melody.snap_to_key(value, key)
+
+    assert pitch == expected
+    assert type(pitch) is int
+
+
+def test_the_key_of_a_note_is_the_section_at_its_start() -> None:
+    keys = [
+        {"start_s": 0.0, "end_s": 10.0, "tonic": "C", "mode": "major"},
+        {"start_s": 10.0, "end_s": 20.0, "tonic": "D", "mode": "major"},
+    ]
+
+    assert melody.key_at(keys, 0.0) == keys[0]
+    assert melody.key_at(keys, 9.99) == keys[0]
+    assert melody.key_at(keys, 10.0) == keys[1]
+    assert melody.key_at(keys, 25.0) == keys[1]
 
 
 # Key -----------------------------------------------------------------------
@@ -303,19 +312,36 @@ def test_profile_correlation_picks_the_rotated_key(key: int) -> None:
 
 
 class FakeTracker:
-    """Stands in for RMVPE: a 10 ms curve of one held note, quiet frames below the threshold."""
+    """Stands in for RMVPE: a 10 ms curve holding each (start_s, end_s, midi)
+    segment, the frames between them below the threshold."""
 
-    def __init__(self, midi=67.0, confidence=0.5):
-        self.midi = midi
+    def __init__(self, segments=((0.5, 1.5, 67.0),), confidence=0.5):
+        self.segments = segments
         self.confidence = confidence
         self.calls: list[tuple[np.ndarray, int]] = []
 
     def __call__(self, mono: np.ndarray, rate: int):
         self.calls.append((mono, rate))
         times = np.arange(int(len(mono) / rate / 0.01)) * 0.01
-        frequency = np.full(len(times), float(melody.midi_to_hz(self.midi)))
-        confidence = np.where((times >= 0.5) & (times < 1.5), self.confidence, 0.01)
-        return times, frequency, confidence
+        midi = np.full(len(times), 40.0)
+        confidence = np.full(len(times), 0.01)
+        for start, end, pitch in self.segments:
+            inside = (times >= start - 1e-9) & (times < end - 1e-9)
+            midi[inside] = pitch
+            confidence[inside] = self.confidence
+        return times, melody.midi_to_hz(midi), confidence
+
+
+class FakeSome:
+    """Stands in for SOME: the chunks it was given."""
+
+    def __init__(self, chunks=None):
+        self.chunks = [chunk(0.5, [1.0], [False])] if chunks is None else chunks
+        self.calls: list[tuple[np.ndarray, int]] = []
+
+    def __call__(self, mono: np.ndarray, rate: int):
+        self.calls.append((mono, rate))
+        return self.chunks
 
 
 class FakeChroma:
@@ -343,15 +369,16 @@ def make_stems(seconds=2.0):
     return stems
 
 
-def test_analysis_tracks_the_lead_and_keys_on_the_instrumental() -> None:
+def test_analysis_tracks_and_splits_the_lead_and_keys_on_the_instrumental() -> None:
     stems = make_stems()
-    tracker, chroma = FakeTracker(), FakeChroma()
+    tracker, some, chroma = FakeTracker(), FakeSome(), FakeChroma()
 
-    document = melody.analyze(stems, tracker, chroma)
+    document = melody.analyze(stems, tracker, some, chroma)
 
-    ((lead, lead_rate),) = tracker.calls
-    assert lead_rate == SAMPLE_RATE
-    np.testing.assert_allclose(lead, stems["lead"].mean(axis=1))
+    for calls in (tracker.calls, some.calls):
+        ((lead, lead_rate),) = calls
+        assert lead_rate == SAMPLE_RATE
+        np.testing.assert_allclose(lead, stems["lead"].mean(axis=1))
     ((instrumental, chroma_rate),) = chroma.calls
     assert chroma_rate == SAMPLE_RATE
     expected = sum(
@@ -359,15 +386,81 @@ def test_analysis_tracks_the_lead_and_keys_on_the_instrumental() -> None:
     )
     np.testing.assert_allclose(instrumental, expected.mean(axis=1), rtol=1e-6)
     assert document == {
-        "notes": [{"start_s": 0.5, "end_s": 1.5, "midi": 67.0}],
+        "notes": [{"start_s": 0.5, "end_s": 1.5, "midi": 67}],
         "keys": [{"start_s": 0.0, "end_s": 2.0, "tonic": "G", "mode": "major"}],
     }
+
+
+def test_keys_come_from_the_pitches_before_the_snap(monkeypatch) -> None:
+    tracker = FakeTracker(((0.5, 1.0, 64.3), (1.0, 1.5, 65.4)))
+    some = FakeSome(
+        [
+            chunk(0.5, [0.5, 0.5], [False, False]),
+            # A rest, then a note RMVPE hears nothing in: both dropped.
+            chunk(1.8, [0.2, 0.5], [True, False]),
+        ]
+    )
+    g_major = [{"start_s": 0.0, "end_s": 3.0, "tonic": "G", "mode": "major"}]
+    detected: list[tuple] = []
+
+    def detect_keys(chroma, chroma_times, notes, duration):
+        detected.append((chroma, chroma_times, notes, duration))
+        return g_major
+
+    monkeypatch.setattr(melody, "detect_keys", detect_keys)
+
+    document = melody.analyze(make_stems(3.0), tracker, some, FakeChroma())
+
+    ((chroma, chroma_times, notes, duration),) = detected
+    assert chroma.shape == (12, 30)
+    assert len(chroma_times) == 30
+    assert duration == 3.0
+    assert [(n["start_s"], n["end_s"]) for n in notes] == [(0.5, 1.0), (1.0, 1.5)]
+    assert [n["midi"] for n in notes] == [
+        pytest.approx(64.3, abs=1e-6),
+        pytest.approx(65.4, abs=1e-6),
+    ]
+    # F is out of G major and the voice is above it: F#.
+    assert document == {
+        "notes": [
+            {"start_s": 0.5, "end_s": 1.0, "midi": 64},
+            {"start_s": 1.0, "end_s": 1.5, "midi": 66},
+        ],
+        "keys": g_major,
+    }
+
+
+def test_a_note_across_a_key_change_snaps_to_the_key_at_its_start(
+    monkeypatch,
+) -> None:
+    # The note runs from 0.5 s to 1.5 s, the key changes at 1.0 s. C# is out of
+    # C major, so the voice above it goes up to D; in D major it stays C#.
+    keys = [
+        {"start_s": 0.0, "end_s": 1.0, "tonic": "C", "mode": "major"},
+        {"start_s": 1.0, "end_s": 2.0, "tonic": "D", "mode": "major"},
+    ]
+    monkeypatch.setattr(melody, "detect_keys", lambda *args: keys)
+    tracker = FakeTracker(((0.5, 1.5, 61.3),))
+
+    document = melody.analyze(make_stems(), tracker, FakeSome(), FakeChroma())
+
+    assert document["notes"] == [{"start_s": 0.5, "end_s": 1.5, "midi": 62}]
+
+
+def test_note_times_keep_3_decimals() -> None:
+    some = FakeSome([chunk(0.123456, [0.5], [False])])
+    tracker = FakeTracker(((0.0, 2.0, 67.0),))
+
+    document = melody.analyze(make_stems(), tracker, some, FakeChroma())
+
+    assert document["notes"] == [{"start_s": 0.123, "end_s": 0.623, "midi": 67}]
 
 
 def test_frames_under_the_rmvpe_threshold_are_unvoiced() -> None:
     document = melody.analyze(
         make_stems(),
         FakeTracker(confidence=melody.RMVPE_THRESHOLD - 0.001),
+        FakeSome(),
         FakeChroma(),
     )
 
@@ -375,9 +468,9 @@ def test_frames_under_the_rmvpe_threshold_are_unvoiced() -> None:
     assert [(k["tonic"], k["mode"]) for k in document["keys"]] == [("G", "major")]
 
 
-def test_the_analysis_keeps_the_s6_settings() -> None:
-    # docs/PLAN.md section 5.2 and the S6 results: a change here is a new
-    # analysis, judged by ear again, not a refactor.
+def test_the_analysis_keeps_the_settings_chosen_by_ear() -> None:
+    # docs/PLAN.md section 5.2 and the results of beta item 2: a change here
+    # is a new analysis, judged by ear again, not a refactor.
     def defaults(function):
         return {
             name: parameter.default
@@ -387,13 +480,11 @@ def test_the_analysis_keeps_the_s6_settings() -> None:
 
     assert melody.RMVPE_THRESHOLD == 0.03
     assert melody.GRID_HOP == 0.01
-    assert defaults(melody.segment_notes) == {
-        "min_confidence": 0.0,
-        "smooth_frames": 19,
-        "split_semitones": 0.7,
-        "split_frames": 3,
-        "max_gap_s": 0.03,
-        "min_note_s": 0.08,
+    assert melody.NOTE_TRIM == 0.2
+    assert melody.SLICER_MAX_SIL_KEPT == 1000
+    assert melody.SCALES == {
+        "major": (0, 2, 4, 5, 7, 9, 11),
+        "minor": (0, 2, 3, 5, 7, 8, 10),
     }
     assert defaults(melody.detect_keys) == {
         "window_s": 16.0,
@@ -435,8 +526,170 @@ def test_rmvpe_gets_the_model_path_and_checks_the_model_itself(
 
 
 def test_the_document_holds_plain_python_numbers() -> None:
-    document = melody.analyze(make_stems(), FakeTracker(), FakeChroma())
+    document = melody.analyze(make_stems(), FakeTracker(), FakeSome(), FakeChroma())
 
-    for row in document["notes"] + document["keys"]:
+    for note in document["notes"]:
+        assert [type(note[k]) for k in ("start_s", "end_s", "midi")] == [
+            float,
+            float,
+            int,
+        ]
+    for row in document["keys"]:
         for value in row.values():
             assert type(value) in (float, str)
+
+
+# SOME -----------------------------------------------------------------------
+
+
+def tone(seconds, rate=SAMPLE_RATE):
+    t = np.arange(int(seconds * rate)) / rate
+    return 0.5 * np.sin(2 * np.pi * 220 * t)
+
+
+def test_the_lead_is_sliced_at_its_silences_and_each_chunk_inferred() -> None:
+    # 6 s sung, 2 s of silence, 6 s sung: two chunks, the silence cut down.
+    mono = np.concatenate([tone(6), np.zeros(2 * SAMPLE_RATE), tone(6)])
+    given: list[list[np.ndarray]] = []
+
+    def infer(waveforms):
+        given.append(waveforms)
+        return [
+            {
+                "note_midi": np.array([57.0]),
+                "note_dur": np.array([len(w) / SAMPLE_RATE]),
+                "note_rest": np.array([False]),
+            }
+            for w in waveforms
+        ]
+
+    chunks = melody.slice_and_infer(mono, SAMPLE_RATE, infer)
+
+    ((first, second),) = given
+    assert first.dtype == second.dtype == np.float32
+    assert chunks[0]["offset"] == 0
+    assert 6.0 < chunks[1]["offset"] < 8.0
+    np.testing.assert_array_equal(first, mono[: len(first)].astype(np.float32))
+    start = round(chunks[1]["offset"] * SAMPLE_RATE)
+    np.testing.assert_array_equal(
+        second, mono[start : start + len(second)].astype(np.float32)
+    )
+    assert len(first) + len(second) < len(mono)
+    for c, w in zip(chunks, (first, second), strict=True):
+        assert set(c) == {"offset", "note_midi", "note_dur", "note_rest"}
+        assert c["note_dur"][0] == len(w) / SAMPLE_RATE
+
+
+def model_zip(checkpoint=b"weights") -> bytes:
+    """The release's zip: a folder named 256 in a zip named 128, as shipped."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("0119_continuous256_5spk/config.yaml", "units_dim: 80\n")
+        archive.writestr(
+            "0119_continuous256_5spk/model_ckpt_steps_100000_simplified.ckpt",
+            checkpoint,
+        )
+    return buffer.getvalue()
+
+
+class FakeFetch:
+    """Stands in for the download: writes data to the path it is given."""
+
+    def __init__(self, data: bytes, fail: Exception | None = None):
+        self.data = data
+        self.fail = fail
+        self.calls: list[tuple[str, Path]] = []
+
+    def __call__(self, url: str, path: Path) -> None:
+        self.calls.append((url, path))
+        path.write_bytes(self.data)
+        if self.fail is not None:
+            raise self.fail
+
+
+def test_the_some_model_is_downloaded_and_unpacked_on_first_use(tmp_path) -> None:
+    model_dir = tmp_path / "models"
+    fetch = FakeFetch(model_zip())
+
+    checkpoint = melody.ensure_some_model(model_dir, fetch)
+
+    folder = model_dir / "some" / "0119_continuous256_5spk"
+    assert checkpoint == folder / "model_ckpt_steps_100000_simplified.ckpt"
+    assert checkpoint.read_bytes() == b"weights"
+    assert (folder / "config.yaml").read_text() == "units_dim: 80\n"
+    url = (
+        "https://github.com/openvpi/SOME/releases/download/v1.0.0-baseline/"
+        "0119_continuous128_5spk.zip"
+    )
+    part = model_dir / "some" / "0119_continuous128_5spk.zip.part"
+    assert fetch.calls == [(url, part)]
+    assert [p.name for p in (model_dir / "some").iterdir()] == [folder.name]
+
+
+def test_a_model_already_there_is_not_downloaded_again(tmp_path) -> None:
+    melody.ensure_some_model(tmp_path, FakeFetch(model_zip()))
+    fetch = FakeFetch(b"")
+
+    checkpoint = melody.ensure_some_model(tmp_path, fetch)
+
+    assert fetch.calls == []
+    assert checkpoint.read_bytes() == b"weights"
+
+
+@pytest.mark.parametrize(
+    ("data", "fail", "error"),
+    [
+        (model_zip()[:1000], OSError("connection reset"), OSError),
+        (b"not a zip", None, zipfile.BadZipFile),
+    ],
+    ids=["interrupted", "broken"],
+)
+def test_a_broken_download_is_never_taken_for_the_model(
+    tmp_path, data: bytes, fail: Exception | None, error: type
+) -> None:
+    with pytest.raises(error):
+        melody.ensure_some_model(tmp_path, FakeFetch(data, fail))
+
+    assert not (tmp_path / "some" / "0119_continuous256_5spk").exists()
+    fetch = FakeFetch(model_zip())
+    checkpoint = melody.ensure_some_model(tmp_path, fetch)
+    assert len(fetch.calls) == 1
+    assert checkpoint.read_bytes() == b"weights"
+    assert [p.name for p in (tmp_path / "some").iterdir()] == [
+        "0119_continuous256_5spk"
+    ]
+
+
+def test_some_runs_on_the_cpu_with_the_config_next_to_its_checkpoint(
+    monkeypatch, tmp_path
+) -> None:
+    melody.ensure_some_model(tmp_path, FakeFetch(model_zip()))
+    made: list[tuple] = []
+
+    class FakeInference:
+        def __init__(self, config, model_path, device=None):
+            made.append((config, model_path, device))
+
+        def infer(self, waveforms):
+            return [
+                {"note_midi": [], "note_dur": [], "note_rest": []} for _ in waveforms
+            ]
+
+    inference = types.ModuleType("studio.some.inference.me_infer")
+    inference.MIDIExtractionInference = FakeInference
+    yaml = types.ModuleType("yaml")
+    yaml.safe_load = lambda text: {"parsed": text}
+    monkeypatch.setitem(sys.modules, "studio.some.inference.me_infer", inference)
+    monkeypatch.setitem(sys.modules, "yaml", yaml)
+
+    chunks = melody.some_notes(np.zeros(SAMPLE_RATE), SAMPLE_RATE, tmp_path)
+
+    folder = tmp_path / "some" / "0119_continuous256_5spk"
+    assert made == [
+        (
+            {"parsed": "units_dim: 80\n"},
+            folder / "model_ckpt_steps_100000_simplified.ckpt",
+            "cpu",
+        )
+    ]
+    assert chunks == [{"offset": 0, "note_midi": [], "note_dur": [], "note_rest": []}]

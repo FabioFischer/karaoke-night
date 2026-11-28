@@ -1,20 +1,27 @@
-"""The lead melody and the key per section of a song, chosen in spike S6.
+"""The lead melody and the key per section of a song (docs/PLAN.md section 3).
 
-RMVPE tracks the pitch of the lead stem on a 10 ms grid, the curve is grouped
-into notes, and the key per section comes from those notes plus the chroma of
-the instrumental, correlated with the Krumhansl-Kessler profiles over 16 s
-windows and smoothed with a Viterbi path (docs/PLAN.md section 3). librosa and
-rmvpe_onnx are imported only inside rmvpe_track and instrumental_chroma, so
-the rest works without the `separation` extra.
+SOME finds where the notes of the lead stem start and end, RMVPE tracks its
+pitch on a 10 ms grid, and each note takes the median pitch of its middle
+frames. The key per section comes from those pitches plus the chroma of the
+instrumental, correlated with the Krumhansl-Kessler profiles over 16 s windows
+and smoothed with a Viterbi path, as spike S6 chose. Each note then goes to its
+nearest semitone, or to the scale note on the voice's side when that semitone
+is outside the key. torch, yaml, librosa and rmvpe_onnx are imported only
+inside some_notes, rmvpe_track and instrumental_chroma, so the rest works
+without the `separation` extra.
 """
 
-import warnings
+import math
+import shutil
+import urllib.request
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 
 from studio.audio import SAMPLE_RATE
+from studio.some.utils.slicer2 import Slicer
 
 # RMVPE's pitch output is put on this grid, frame i at i * GRID_HOP seconds.
 GRID_HOP = 0.01
@@ -23,6 +30,21 @@ RMVPE_THRESHOLD = 0.03
 RMVPE_MODEL = "rmvpe.onnx"
 CHROMA_RATE = 22_050
 CHROMA_HOP = 2_048
+
+# A note's pitch is the median of its frames without the first and last 20%.
+NOTE_TRIM = 0.2
+# SOME's own infer.py slices with this; silences longer than 1 s are cut down.
+SLICER_MAX_SIL_KEPT = 1000
+SCALES = {"major": (0, 2, 4, 5, 7, 9, 11), "minor": (0, 2, 3, 5, 7, 8, 10)}
+
+# SOME's model, CC BY-NC-SA 4.0. The zip says 128 and its folder 256, as released.
+SOME_URL = (
+    "https://github.com/openvpi/SOME/releases/download/v1.0.0-baseline/"
+    "0119_continuous128_5spk.zip"
+)
+SOME_FOLDER = "some"
+SOME_MODEL = "0119_continuous256_5spk"
+SOME_CHECKPOINT = "model_ckpt_steps_100000_simplified.ckpt"
 
 # The instrumental the key is read from, as spike S6 read it.
 INSTRUMENT_STEMS = ("drums", "bass", "guitar", "piano", "other")
@@ -38,6 +60,10 @@ PROFILES = np.array(
 
 PitchTracker = Callable[[np.ndarray, int], tuple[np.ndarray, np.ndarray, np.ndarray]]
 """track(mono, rate) returns the tracker's frame times, pitch in Hz and confidence."""
+
+NoteSplitter = Callable[[np.ndarray, int], list[dict]]
+"""split(mono, rate) returns SOME's chunks: offset in seconds, then note_midi,
+note_dur in seconds and note_rest per note."""
 
 Chroma = Callable[[np.ndarray, int], tuple[np.ndarray, np.ndarray]]
 """chroma(mono, rate) returns the (12, frames) chroma and the frame times."""
@@ -83,86 +109,43 @@ def to_grid(times, f0, confidence, grid):
 # Notes ------------------------------------------------------------------------
 
 
-def _nan_median_filter(values, size):
-    """Median over the voiced frames of a centered window; unvoiced frames stay NaN."""
-    half = size // 2
-    padded = np.pad(values, half, constant_values=np.nan)
-    windows = np.lib.stride_tricks.sliding_window_view(padded, size)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        smoothed = np.nanmedian(windows, axis=1)
-    return np.where(np.isnan(values), np.nan, smoothed)
-
-
-def segment_notes(
-    times,
-    f0,
-    confidence,
-    min_confidence=0.0,
-    smooth_frames=19,
-    split_semitones=0.7,
-    split_frames=3,
-    max_gap_s=0.03,
-    min_note_s=0.08,
-) -> list[dict]:
-    """Group an f0 curve into notes.
-
-    Frames that are unvoiced or under min_confidence are dropped, the pitch is
-    median smoothed over smooth_frames, and a note ends at a gap longer than
-    max_gap_s or when the smoothed pitch stays more than split_semitones away
-    from the note's smoothed median for split_frames frames. The default
-    window of 190 ms spans about one vibrato period (5 to 6 Hz), so vibrato
-    does not reach the split decision, while the median still keeps a held
-    step sharp. Notes shorter than min_note_s are dropped. midi is the median
-    of the unsmoothed pitch, unrounded to a semitone so the tuning stays.
-    """
-    times, confidence = (
-        np.asarray(times, dtype=float),
-        np.asarray(confidence, dtype=float),
-    )
-    hop = float(times[1] - times[0]) if len(times) > 1 else GRID_HOP
-    midi = hz_to_midi(f0)
-    midi[~(confidence >= min_confidence)] = np.nan
-    smoothed = _nan_median_filter(midi, smooth_frames)
+def notes_from_chunks(chunks) -> list[tuple[float, float]]:
+    """The (start_s, end_s) of SOME's notes, walking each chunk's durations from its offset."""
     notes = []
-
-    def close(frames):
-        if (
-            not frames
-            or (times[frames[-1]] + hop - times[frames[0]]) < min_note_s - 1e-9
-        ):
-            return
-        notes.append(
-            {
-                "start_s": round(float(times[frames[0]]), 3),
-                "end_s": round(float(times[frames[-1]] + hop), 3),
-                "midi": round(float(np.median(midi[frames])), 2),
-            }
-        )
-
-    current, pending, gap = [], [], 0
-    for i, value in enumerate(smoothed):
-        if np.isnan(value):
-            if current:
-                gap += 1
-                if gap * hop > max_gap_s + 1e-9:
-                    close(current)
-                    current, pending = [], []
-            continue
-        gap = 0
-        if not current:
-            current = [i]
-            continue
-        if abs(value - np.median(smoothed[current])) > split_semitones:
-            pending.append(i)
-            if len(pending) >= split_frames:
-                close(current)
-                current, pending = pending, []
-        else:
-            current += pending + [i]
-            pending = []
-    close(current)
+    for chunk in chunks:
+        start = float(chunk["offset"])
+        for duration, rest in zip(chunk["note_dur"], chunk["note_rest"], strict=True):
+            end = start + float(duration)
+            if not rest:
+                notes.append((start, end))
+            start = end
     return notes
+
+
+def note_value(midi, start, end) -> float | None:
+    """The median voiced pitch of a note's grid frames, its first and last 20% left out.
+
+    A note of 4 frames or fewer keeps them all; None when no frame is voiced.
+    """
+    a, b = round(start / GRID_HOP), round(end / GRID_HOP)
+    trim = int((b - a) * NOTE_TRIM)
+    frames = midi[a + trim : b - trim] if b - a > 4 else midi[a:b]
+    frames = frames[~np.isnan(frames)]
+    return float(np.median(frames)) if len(frames) else None
+
+
+def key_at(keys: list[dict], time: float) -> dict:
+    """The key section a time falls in; the last one past the end."""
+    return [key for key in keys if key["start_s"] <= time][-1]
+
+
+def snap_to_key(value: float, key: dict) -> int:
+    """The nearest semitone, or the next one on the voice's side when it is out of the key."""
+    pitch = round(value)
+    tonic = PITCH_NAMES.index(key["tonic"])
+    if (pitch - tonic) % 12 in SCALES[key["mode"]]:
+        return pitch
+    return math.floor(value) if pitch > value else math.ceil(value)
 
 
 # Key --------------------------------------------------------------------------
@@ -279,6 +262,7 @@ def detect_keys(
 def analyze(
     stems: dict[str, np.ndarray],
     track: PitchTracker,
+    split: NoteSplitter,
     chroma: Chroma,
     rate: int = SAMPLE_RATE,
 ) -> dict:
@@ -289,10 +273,26 @@ def analyze(
     confidence = np.asarray(confidence, dtype=float)
     f0 = np.where(confidence >= RMVPE_THRESHOLD, frequency, np.nan)
     grid = grid_times(duration)
-    notes = segment_notes(grid, *to_grid(times, f0, confidence, grid))
+    midi = hz_to_midi(to_grid(times, f0, confidence, grid)[0])
+    notes = []
+    for start, end in notes_from_chunks(split(lead, rate)):
+        value = note_value(midi, start, end)
+        if value is not None:
+            notes.append({"start_s": start, "end_s": end, "midi": value})
     instrumental = sum(stems[name] for name in INSTRUMENT_STEMS).mean(axis=1)
     frames, frame_times = chroma(instrumental, rate)
-    return {"notes": notes, "keys": detect_keys(frames, frame_times, notes, duration)}
+    keys = detect_keys(frames, frame_times, notes, duration)
+    return {
+        "notes": [
+            {
+                "start_s": round(note["start_s"], 3),
+                "end_s": round(note["end_s"], 3),
+                "midi": snap_to_key(note["midi"], key_at(keys, note["start_s"])),
+            }
+            for note in notes
+        ],
+        "keys": keys,
+    }
 
 
 def rmvpe_track(mono: np.ndarray, rate: int, model_dir: Path):
@@ -312,3 +312,62 @@ def instrumental_chroma(mono: np.ndarray, rate: int):
     )
     chroma = librosa.feature.chroma_cqt(y=audio, sr=CHROMA_RATE, hop_length=CHROMA_HOP)
     return chroma, librosa.times_like(chroma, sr=CHROMA_RATE, hop_length=CHROMA_HOP)
+
+
+def some_notes(mono: np.ndarray, rate: int, model_dir: Path) -> list[dict]:
+    """SOME on the CPU, as the tuning round ran it; downloads its model on first use."""
+    import yaml
+
+    from studio.some.inference.me_infer import MIDIExtractionInference
+
+    checkpoint = ensure_some_model(model_dir)
+    config = yaml.safe_load((checkpoint.parent / "config.yaml").read_text("utf-8"))
+    model = MIDIExtractionInference(config, checkpoint, device="cpu")
+    return slice_and_infer(mono, rate, model.infer)
+
+
+def slice_and_infer(
+    mono: np.ndarray, rate: int, infer: Callable[[list[np.ndarray]], list[dict]]
+) -> list[dict]:
+    """Slice the lead at its silences, as SOME's infer.py does, and infer each chunk."""
+    chunks = Slicer(sr=rate, max_sil_kept=SLICER_MAX_SIL_KEPT).slice(
+        mono.astype(np.float32)
+    )
+    results = infer([chunk["waveform"] for chunk in chunks])
+    return [
+        {"offset": chunk["offset"], **result}
+        for chunk, result in zip(chunks, results, strict=True)
+    ]
+
+
+def download_file(url: str, path: Path) -> None:
+    with urllib.request.urlopen(url, timeout=60) as response, path.open("wb") as f:
+        shutil.copyfileobj(response, f)
+
+
+def ensure_some_model(
+    model_dir: Path, fetch: Callable[[str, Path], None] = download_file
+) -> Path:
+    """SOME's checkpoint in model_dir/some, downloaded and unpacked when missing.
+
+    The zip downloads to a .part name and unpacks into a hidden folder, and only
+    the complete model folder is renamed into place, so an interrupted run
+    leaves nothing that looks like the model; the next one starts over.
+    """
+    folder = model_dir / SOME_FOLDER
+    checkpoint = folder / SOME_MODEL / SOME_CHECKPOINT
+    if checkpoint.is_file():
+        return checkpoint
+    folder.mkdir(parents=True, exist_ok=True)
+    archive = folder / (SOME_URL.rsplit("/", 1)[1] + ".part")
+    unpacked = folder / ".unpacking"
+    shutil.rmtree(unpacked, ignore_errors=True)
+    try:
+        fetch(SOME_URL, archive)
+        with zipfile.ZipFile(archive) as zipped:
+            zipped.extractall(unpacked)
+        (unpacked / SOME_MODEL).rename(folder / SOME_MODEL)
+    finally:
+        archive.unlink(missing_ok=True)
+        shutil.rmtree(unpacked, ignore_errors=True)
+    return checkpoint

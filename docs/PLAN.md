@@ -7,9 +7,8 @@
 *Last updated: 2026-11-27*
 
 - **Phase:** 0 (proofs of concept) done. Phase 1 (alpha) done but for the first-time user of the A8 criterion. Phase 2 (beta) started.
-- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 rounds 1 and 2 (round 2 with a native ASIO interface: 64 samples is the working buffer), S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the Stage's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only while the karaoke is in use, and the public page lives on Vercel, fed by a snapshot the Stage publishes. Milestone A9 (the night tools: `scripts/` and the runbook `docs/NIGHT.md`, results in §6 Phase 1). Milestone A10 (public access, §5.9, results in §6 Phase 1). Milestone B1, the first of the beta (pause, volumes and reordering, §6 Phase 2). Milestone B2 (the pre-performance, results in §6 Phase 2). Beta item 2, first half: the lead melody and the key per section as `pipeline_version` 2, and `studio analyze` to bring the library to it; the structure passes, the notes fail by ear and get a tuning round next (results in §6 Phase 2).
+- **Done:** plan, README, license, agent guidance (`CLAUDE.md`), first review of the plan (decisions recorded in §3, §5 and §6), S1 rounds 1 and 2 (round 2 with a native ASIO interface: 64 samples is the working buffer), S3, S4, S2 and S3 round 2 (all pass), S5 (pass on the Studio side, the Stage's downlink decides the time), S6 (pass, RMVPE chosen). Results in §6. Milestone A1 (repository skeleton: uv workspace, Vite, CI); the spike scripts left the repository with it. Milestone A2 (`core` manifest model, §5.2). Milestone A3 (Studio pipeline CLI, results in §6 Phase 1). Milestone A4 (Studio API, results in §6 Phase 1). Milestone A5 (Stage library, §5.6, results in §6 Phase 1). Milestone A6 (REAPER bridge, §5.4, results in §6 Phase 1). Milestone A7 (search, §5.1, `stage search`, results in §6 Phase 1). Milestone A8a (Stage API, §5.8, `stage serve`, results in §6 Phase 1). Milestone A8b (the TV screens on the §5.7 routes in their alpha subset, over the §5.8 API, results in §6 Phase 1). The beta's web screens (§5.7), the target A7 and A8 build toward. The public access design (§5.9): the Studio API runs only while the karaoke is in use, and the public page lives on Vercel, fed by a snapshot the Stage publishes. Milestone A9 (the night tools: `scripts/` and the runbook `docs/NIGHT.md`, results in §6 Phase 1). Milestone A10 (public access, §5.9, results in §6 Phase 1). Milestone B1, the first of the beta (pause, volumes and reordering, §6 Phase 2). Milestone B2 (the pre-performance, results in §6 Phase 2). Beta item 2, first half: the lead melody and the key per section as `pipeline_version` 2, and `studio analyze` to bring the library to it; its notes then tuned against hand made charts and by ear: SOME's note boundaries with RMVPE's pitch, snapped to the key, as `pipeline_version` 3 (results in §6 Phase 2).
 - **Next:**
-  - tune the melody's notes by ear (beta item 2, §6 Phase 2);
   - the A8 criterion with someone who has never used the app;
   - measure a package download on a network other than the home one (S5, `docs/NIGHT.md`);
   - count the public page's edge requests and store commands on a night with many phones (§8).
@@ -43,7 +42,7 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Storage | In the alpha the Stage library is the folder of packages on disk, with no database. SQLite comes with the play history. | No infrastructure to run, and nothing to keep in step with the folders until there is data that is not in them. |
 | Microphones | The REAPER template ships with 2 mic tracks from day one. | The beta needs two singers, and this avoids rebuilding the template. |
 | Vocal effects | The effects chain is free and controlled by hand in REAPER on the Stage (for example pitch correction, reverb, delay, compression, doubling). The app never picks plugins. In the beta it only provides data that the chain may use (§6, Phase 2). | Effects need room to evolve, and REAPER is the right place to tune them. |
-| Melody and key | RMVPE (`rmvpe-onnx`, on the CPU) on the lead stem, grouped into notes; key per section from the notes plus the instrumental's chroma, with Krumhansl-Kessler profiles over 16 s windows and a Viterbi smoothing. Chosen in S6. | Got the octave right where the other trackers jumped up on a strong held note, fewest chromatic artifacts, and about 0.5 s per minute of song. |
+| Melody and key | On the lead stem, both on the CPU: SOME (inference vendored from [openvpi/SOME](https://github.com/openvpi/SOME)) finds where each note starts and ends, and RMVPE (`rmvpe-onnx`) gives its pitch, the median of the note's middle frames. The key per section comes from those pitches plus the instrumental's chroma, with Krumhansl-Kessler profiles over 16 s windows and a Viterbi smoothing. Each note then takes its nearest semitone, or, when that semitone is outside the key of its section, the scale note on the side the voice is on. RMVPE and the keys were chosen in S6; SOME and the key snap in the note tuning round of beta item 2. | RMVPE got the octave right where the other trackers jumped up on a strong held note, with the fewest chromatic artifacts. Grouping its curve into notes transcribed every pitch change the voice made (§6 Phase 2, item 2); SOME's notes were measured against UltraStar charts on 3 songs and approved by ear. |
 | Pitch correction | Alpha: chromatic mode (snap to the nearest semitone), which needs no song data. Beta: per-section key or target notes, from the melody analysis. | A fixed key sounds wrong in songs that change key. |
 | Key change | Chosen at setup only. The key stays fixed while the song plays. | Simpler, and enough for singing. |
 | Library sync | The Studio is the source of truth. The Stage mirrors the whole Studio library: it downloads what is missing and removes what the Studio no longer lists. Deleting a song means deleting it on the Studio. | Simple, and a song deleted by hand doesn't come back on the next sync. Disk use gets revisited if it becomes a problem. |
@@ -52,7 +51,8 @@ A self-hosted karaoke app for private use that plays the **original recording** 
 | Public access | While the Stage runs, anyone with the link opens `/karaoke` on Vercel to add songs to the playlist, remove any song not playing and follow the lyrics. The Stage stays the owner of the state: it publishes a snapshot to a store on Vercel and reads the requests the public leaves there (§5.9). Nothing from the internet reaches the Stage, and no code is needed in the link. | The Stage keeps working offline, the number of phones does not load the machine playing the audio, and a malformed request is only something the Stage discards. |
 | Web screens | Three routes around one shared playlist: `/karaoke` (home), `/karaoke/stage` (setup and the song playing) and `/karaoke/stage/results` (§5.7). This is the beta's target; the alpha screens use the same routes and grow into it. A product version would be redesigned. | The beta's flow is known now, so the alpha screens don't have to be rewritten for it. |
 | Workflow | One PR per milestone. | Small, reviewable changes. |
-| License | MIT, to be revisited if the app matures into a product. | Simple and permissive, and every dependency is permissive too. |
+| License | MIT, to be revisited if the app matures into a product. | Simple and permissive, and every dependency's code is permissive too (for the model weights, see the next row). |
+| Model weights | SOME's model, which splits the melody into notes, is CC BY-NC-SA 4.0: non commercial, share alike. It downloads on first use and is never committed; SOME's code, vendored in `packages/studio/src/studio/some/`, is MIT. To be revisited with the license above if the app becomes a product. | It is the note splitter that passed by ear, and a personal, non commercial project may use it. |
 
 ## 4. Architecture principles
 
@@ -132,7 +132,7 @@ library/<song_id>/
 ```json
 {
   "schema": 1,
-  "pipeline_version": 2,
+  "pipeline_version": 3,
   "id": "song-title--artist-name--a1b2c3",
   "title": "Song Title",
   "artist": "Artist Name",
@@ -150,7 +150,7 @@ library/<song_id>/
 }
 ```
 
-- **`pipeline_version`:** 1 for the packages of the alpha, 2 once a package has `melody`. `studio process` and the Studio API write 2; `studio analyze` brings a package of version 1 to 2 (below).
+- **`pipeline_version`:** 1 for the packages of the alpha, 2 once a package has `melody`, 3 once its notes come from SOME and are snapped to the key. `studio process` and the Studio API write 3; `studio analyze` brings a package of version 1 or 2 to 3 (below).
 
 - **`gain_db`:** the gain REAPER applies on playback. Today it holds the headroom compensation from S2 (see Clipping below). Whether it also brings every song to one loudness target is still open, and so is that target in LUFS.
 - **`source`:** where the audio came from, by `type`. `{"type": "youtube_music", "video_id": "…"}` for a YouTube Music video, and `{"type": "file", "sha256": "…"}` for a local audio file, with the sha256 of the file as given (before any conversion). Any other `type` is rejected.
@@ -159,15 +159,15 @@ library/<song_id>/
 
   ```json
   {
-    "notes": [{ "start_s": 12.34, "end_s": 12.9, "midi": 64.18 }],
+    "notes": [{ "start_s": 12.34, "end_s": 12.9, "midi": 64 }],
     "keys":  [{ "start_s": 0.0, "end_s": 203.0, "tonic": "A", "mode": "minor" }]
   }
   ```
 
-  - `notes`: the notes RMVPE found on the lead stem, in time order. `midi` is the note's median pitch as a MIDI number with 2 decimals, not rounded to a semitone, so the recording's tuning stays; consumers round it. A note where nobody sings can come from residue in the lead stem (S6), and a song with no voice has no notes.
+  - `notes`: the notes of the lead stem, in time order. SOME gives where each starts and ends. `midi` is the semitone sung, a whole MIDI number: RMVPE's median pitch over the note without its first and last 20% (all of it for a note of 4 frames or fewer), rounded to the nearest semitone; when that semitone is outside the key of the section the note starts in, the note takes the semitone on the other side of the median, the scale note the voice is closer to. A note in which RMVPE hears no voice is dropped. A note where nobody sings can come from residue in the lead stem (S6), and a song with no voice has no notes. In a package of version 2, `midi` is the median itself, with 2 decimals.
   - `keys`: the key sections, back to back from 0 to the end of the song. `tonic` is one of `C`, `C#`, `D`, `D#`, `E`, `F`, `F#`, `G`, `G#`, `A`, `A#`, `B`; `mode` is `major` or `minor`.
   - Times are in seconds from the start of the stems, with 3 decimals.
-  - The S6 settings: RMVPE threshold 0.03 on a 10 ms grid, notes split against a pitch smoothed over 190 ms when it moves more than 0.7 semitones, key windows of 16 s every 2 s, melody and instrumental chroma weighted half each, a switch cost of 6. The instrumental is drums, bass, guitar, piano and other.
+  - The settings: SOME's `0119_continuous256_5spk` model on the lead stem cut at its silences as SOME's own `infer.py` cuts it (silences kept up to 1 s), RMVPE threshold 0.03 on a 10 ms grid, 20% trimmed from each end of a note for its pitch, the major and natural minor scales for the key snap; from S6, key windows of 16 s every 2 s, melody and instrumental chroma weighted half each, a switch cost of 6. The instrumental is drums, bass, guitar, piano and other.
 - **`studio analyze`** gives packages of an older `pipeline_version` the melody, without separating again: it builds the new version in a build folder (`.<song_id>.<random>.tmp`, §5.3) from a copy of the stems and the lyrics, writes `melody.json` and a manifest that changes only `pipeline_version`, `melody` and `created_at` (a new date, so the Stage downloads the song again, §5.6), then swaps it in as the Stage installs an update: the old folder is renamed to a trash name (`.<song_id>.<random>.deleting`), the new one takes its place and the trash is removed. If the new one cannot take its place, the old one is renamed back, and only then is the build folder removed. If the old one cannot be renamed back either, both folders stay and the `failed` line names them: the operator renames the build folder to `<song_id>` by hand before the next `studio serve`, which removes both shapes (§5.3, Leftovers). A package whose folder cannot be renamed (a file open on Windows) is reported `busy` and stays whole.
 - **Unknown fields are ignored**, not rejected, so an older Stage keeps reading a manifest that a newer `pipeline_version` wrote (for example one that adds melody data). They are also dropped on write: a Stage that loads and then writes a newer manifest loses those fields. Note for A5: the Stage library must account for this, for example by keeping the downloaded `manifest.json` as is.
 - **Paths stay inside the package:** every `file` (stems, lyrics and melody) is relative to the package directory. Empty, absolute (POSIX or Windows), drive-relative, UNC and `..` paths are rejected.
@@ -243,7 +243,7 @@ karaoke-night/
 ├─ pyproject.toml               # uv workspace
 ├─ packages/
 │  ├─ core/                     # shared models (manifest, contracts), lightweight
-│  ├─ studio/                   # Studio: jobs, download, separation, lyrics (torch, audio-separator)
+│  ├─ studio/                   # Studio: jobs, download, separation, lyrics, melody (torch, audio-separator, vendored SOME)
 │  └─ stage/                    # Stage: local server, library, REAPER bridge, session
 ├─ web/                         # React + Vite + TS: TV screens, and the public phone page (§5.9)
 │  ├─ api/public/               # Vercel functions of the public page
@@ -648,7 +648,7 @@ The beta's screens are in §5.7; the items below fill them in (the results repor
 - **By ear (the maintainer, 4 songs):** a flourish that is not quite in tune becomes a chromatic note, where staying on the base or previous note would make sense; in one song with a rough, speech-like voice many notes were wrong. Note changes come slightly after the voice's, though the timing as a whole stays in sync. Short notes an octave up show up now and then, as S6 saw.
 - **Measured on 5 songs** (the maintainer's 4 and one more): 27 to 32% of the notes last under 150 ms, and 12 to 26% fall outside the key detected for their section, 36 to 69 notes per song being both. A note an octave away from both neighbors, under 300 ms, shows up 2 to 12 times per song. A note that starts a phrase (after 80 ms of rest or more) begins a median 4 to 33 ms after the nearest onset of the lead stem, and the quarter that start latest begin 44 to 65 ms after it, likely because RMVPE hears the vowel and not the consonant that starts the syllable.
 - **Cause:** the note grouping kept from S6 transcribes every pitch change that holds 30 ms: no rule holds the previous note, merges short notes or looks at the key. S6 had left "hold the previous note" as an idea for the beta, if scoring showed the need.
-- **Next:** a post-processing of the notes, tuned by ear on MIDI variants before it becomes code: a short note merges into the previous one, a short note outside the key goes to the base note, a short octave jump goes back to its neighbors' octave, and a note start moves back to an onset just before it.
+- **Next:** the note tuning round below.
 
 On the Studio, with the branch installed by `uv sync --package studio --extra separation`, the GPU idle:
 
@@ -661,14 +661,33 @@ On the Studio, with the branch installed by `uv sync --package studio --extra se
 
 The lyrics half of item 2 needs its own round, and a spike first: WhisperX 3.8.6 pins torch 2.8 with CUDA 12.8 and CTranslate2 has no CUDA 13 build, while the Studio runs torch 2.14 with CUDA 13.0 for the separation. Only the forced alignment is needed, since LRCLIB already gives the text, and LRCLIB puts what the backing sings in parentheses (15 of the 23 songs of the test library have such lines), so the split into lead and backing can come from the text.
 
-Next, as separate rounds: the tuning of the notes (above), the lyrics half of item 2, item 3, the second microphone (item 1), which the interface of S1 round 2 now allows, and the layout review (B3). Stems toggled while the song plays and the QR code on the TV are left for later.
+**Item 2, the note tuning (2026-11-28): pass.** SOME's note boundaries with RMVPE's pitch, snapped to the key, became `pipeline_version` 3 (§3, §5.2), measured against hand made charts and approved by ear.
+
+- **Ground truth:** UltraStar charts (community made, one note per syllable) of three well-known songs of the test library, downloaded by hand and kept outside the repository, used only to measure. Charts as the source of every song's melody were rejected by the maintainer: a manual download per song breaks adding new songs during a night.
+- **Metric** (agreed before measuring): pitch is the share of the chart's sung time where our note has the chart's pitch class, octave ignored (chart octaves are not reliable); onset is the share of chart notes with one of our note starts within 100 ms. Target: both at 90% or more on each song.
+- **Alignment:** each chart was synced to another upload. One shift per song, found by matching the chart's pitch classes with RMVPE's (-0.86, -13.05 and -0.16 s), and no drift: re-aligned per 40 s window, the shift moved by 0.05 s at most.
+
+| Notes (pitch % / onset % on the three songs) | Pitch | Onset |
+|---|---|---|
+| S6 grouping (`pipeline_version` 2) | 72.4 / 66.4 / 54.9 | 65.0 / 61.0 / 75.6 |
+| S6 grouping post-processed (the variant preferred by ear) | 72.7 / 67.0 / 53.2 | 46.4 / 48.8 / 58.9 |
+| SOME alone | 76.4 / 71.4 / 61.9 | 91.2 / 77.0 / 80.5 |
+| **SOME boundaries, RMVPE pitch, key snap (version 3, the code's own output)** | **80.3 / 69.4 / 60.0** | **90.9 / 77.0 / 80.2** |
+| Ceiling: the chart's own boundaries, RMVPE pitch, key snap | 86.7 / 72.5 / 67.2 | 98.0 / 97.9 / 89.1 |
+
+- **The 90% target is out of reach of any grouping:** with the chart's own boundaries the pitch reaches 68 to 80% (87% at best with the key snap). The ceiling version sounded very good by ear at about 80%, so the metric is stricter than the ear, likely because a chart simplifies the singing. In the last 100 s of one song the chart and RMVPE agree on 25% of the time; which of them is wrong there was not settled.
+- **The pitch was never the problem, the boundaries were:** RMVPE's pitch inside the chart's boundaries sounded right, and the semitone next to the chart's is the most common disagreement (11 to 18% of the time). SOME, a model trained to split singing into notes, fixed most of the rhythm. In its published code SOME takes no pitch tracker (that branch is commented out), so the pitch of each SOME note comes from RMVPE: the median of its middle 60%, then the key snap.
+- **By ear:** the rhythm problems are mostly gone; a few wrong notes inside the key remain (more with SOME alone), good enough for gentle pitch correction. The song with the rough, speech-like voice is still the weakest. The code's output sounded like the approved spike version.
+- **Live on the Studio:** `studio analyze` on a copy of the library, 24 of 24 in 342.9 s with SOME's model downloaded on first use, and on the library itself 24 of 24 in 240.0 s (about 10 s per song); the code's `melody.json` scored within 0.3 points of the spike on every number. The next `stage sync` updated 24 of 24, 0 failed, 2521.8 MB in 1130.8 s. The vendored inference gave the same notes, byte for byte, as SOME's own code on the same audio (review, CPU).
+
+Next, as separate rounds: the lyrics half of item 2, item 3, the second microphone (item 1), which the interface of S1 round 2 now allows, and the layout review (B3). Stems toggled while the song plays and the QR code on the TV are left for later.
 
 Proposed order of the items:
 
 1. **Two microphones:** each mic gets a role (lead or backing), and the role decides which original vocal stems are muted.
-2. **Lyrics and melody analysis** on the Studio. The melody comes first, as `pipeline_version` 2, and `studio analyze` brings the library to it without separating again (§5.2); the lyrics alignment comes in a later version.
+2. **Lyrics and melody analysis** on the Studio. The melody came first, as `pipeline_version` 2 with its notes tuned in version 3, and `studio analyze` brings the library to it without separating again (§5.2); the lyrics alignment comes in a later version.
    - Lyrics split into lead and backing, with WhisperX alignment.
-   - Melody: pitch tracking on the lead stem gives the expected notes and the key per section. Backing gets the same only when it holds a single harmony line; several voices at once aren't reliable. The tracker is RMVPE, from S6. Built for the lead, but the notes still need tuning by ear (results above). The backing is left for later by the maintainer: no item uses it yet, and S6 found no way to tell a single harmony line automatically.
+   - Melody: pitch tracking on the lead stem gives the expected notes and the key per section. Backing gets the same only when it holds a single harmony line; several voices at once aren't reliable. The tracker is RMVPE, from S6. Built for the lead: SOME's note boundaries with RMVPE's pitch, snapped to the key (`pipeline_version` 3, results above). The backing is left for later by the maintainer: no item uses it yet, and S6 found no way to tell a single harmony line automatically.
 3. **Pitch correction guided by the song:** when it loads a song, the Lua listener writes a guide MIDI track with the expected notes and a key automation, both already transposed. Whether the pitch correction plugin uses them stays a choice made in REAPER. Target notes must allow singing an octave up or down.
 4. **Pre-performance,** on the setup of Stage mode (§5.7), milestone B2: before singing, the app plays a short excerpt with its lyrics on screen, so the singer can try the key, the muted stems and the volumes. No volume per stem. The lyrics offset adjustment is deferred by the maintainer, since no song has needed it so far.
 5. **Phone companion page:** A10 already brings live lyrics and adding songs to phones, over the internet (§5.9). What is left for the beta is joining with a QR code shown on the TV.

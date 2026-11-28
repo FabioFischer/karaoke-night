@@ -71,6 +71,7 @@ class Recorder:
             make_runner=self.make_runner,
             lyrics_get=self.lyrics_get,
             track_pitch=self.analysis.track_pitch,
+            extract_notes=self.analysis.extract_notes,
             chroma=self.analysis.chroma,
         )
 
@@ -138,15 +139,19 @@ def test_the_package_carries_the_melody_of_its_lead(
     assert code == 0
     (package,) = tmp_path.iterdir()
     manifest = Manifest.load(package / "manifest.json")
-    assert manifest.pipeline_version == 2
+    assert manifest.pipeline_version == 3
     assert manifest.melody is not None
     assert manifest.melody.sha256 == sha256_file(package / manifest.melody.file)
     document = json.loads((package / "melody.json").read_bytes())
     assert document == melody_of(manifest.duration_s)
     lead, _ = sf.read(package / "stems" / "lead.flac", dtype="float32")
-    (track,) = [c for c in recorder.analysis.calls if c[0] == "track_pitch"]
-    np.testing.assert_allclose(track[1], lead.mean(axis=1), atol=1 / 2**15)
-    assert re.search(r"melody +\d+\.\d s  1 notes, 1 keys", capsys.readouterr().out)
+    for name in ("track_pitch", "extract_notes"):
+        (call,) = [c for c in recorder.analysis.calls if c[0] == name]
+        np.testing.assert_allclose(call[1], lead.mean(axis=1), atol=1 / 2**15)
+    assert re.search(
+        r"melody +\d+\.\d s  SOME \d+\.\d s  1 notes, 1 keys",
+        capsys.readouterr().out,
+    )
 
 
 def test_a_failed_analysis_leaves_nothing_in_the_library(
@@ -392,8 +397,9 @@ def test_model_dir_reaches_the_runner(tmp_path: Path, recorder: Recorder) -> Non
     )
 
     assert ("make_runner", tmp_path / "models") in recorder.calls
-    (track,) = [c for c in recorder.analysis.calls if c[0] == "track_pitch"]
-    assert track[3] == tmp_path / "models"
+    for name in ("track_pitch", "extract_notes"):
+        (call,) = [c for c in recorder.analysis.calls if c[0] == name]
+        assert call[3] == tmp_path / "models"
 
 
 def test_model_dir_defaults_to_the_s2_cache_folder(

@@ -19,7 +19,7 @@ from studio.library import Package, move_to_trash
 from studio.lyrics import FoundLyrics
 from studio.separation import STEMS
 
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 MELODY_FILE = "melody.json"
 
 

@@ -97,13 +97,13 @@ def test_written_package_loads_and_every_sha256_matches(
         assert (info.samplerate, info.channels) == (SAMPLE_RATE, 2)
 
 
-def test_written_package_is_pipeline_version_2_with_its_melody(
+def test_written_package_is_pipeline_version_3_with_its_melody(
     tmp_path: Path, mix, fake_separator
 ) -> None:
     manifest = write_test_package(tmp_path, mix, fake_separator())
 
-    assert PIPELINE_VERSION == 2
-    assert manifest.pipeline_version == 2
+    assert PIPELINE_VERSION == 3
+    assert manifest.pipeline_version == 3
     assert manifest.melody is not None
     assert manifest.melody.file == "melody.json"
     raw = (tmp_path / "melody.json").read_bytes()
